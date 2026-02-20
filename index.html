@@ -2118,7 +2118,7 @@ RivalPay Store
 
   function renderDuplicateIdForm(){
     area.innerHTML = `
-      <label>ID (Isi 4 kolom ID)</label>
+      <label>ID (Isi 8 kolom ID)</label>
       <div class="fmt-row">
         <input id="fmt-dup-id-1" type="text" placeholder="ID 1">
         <input id="fmt-dup-id-2" type="text" placeholder="ID 2">
@@ -2132,7 +2132,7 @@ RivalPay Store
       <label>Aset</label><select id="fmt-dup-aset">${asetOptions}</select>
       <label>Link Bank Account</label><input id="fmt-dup-link-bank" type="text" placeholder="0821xxxxxx">
       <label>Member Choosen ID</label><input id="fmt-dup-member-choosen" type="text" placeholder="anakjalan">
-      <label>Note</label><textarea id="fmt-dup-note" rows="4" placeholder="help duplicate account..."></textarea>`;
+      <label>Note</label><textarea id="fmt-dup-note" rows="8" placeholder="help duplicate account..."></textarea>`;
     unsuspendBtn.style.display='none';
   }
 
@@ -2652,7 +2652,7 @@ if (dt === 'qris') {
       const note = (document.getElementById('fmt-dup-note')?.value || '').trim();
 
       if (!id1 || !aset) return 'ID dan Aset wajib diisi.';
-      const allIds = [id1, id2, id3, id4].filter(Boolean).join(' // ');
+      const allIds = [id1, id2, id3, id4, id5, id6, id7, id8].filter(Boolean).join(' // ');
 
       return [
         'Duplicate ID',

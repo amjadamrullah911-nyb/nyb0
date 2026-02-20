@@ -1,0 +1,39 @@
+{
+  "name": "netlify",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build": "echo 'No functions build step'"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bon4r/Netlify.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/bon4r/Netlify/issues"
+  },
+  "homepage": "https://github.com/bon4r/Netlify#readme",
+  "dependencies": {
+    "@tailwindcss/cli": "^4.0.6",
+    "appwrite": "^17.0.0",
+    "axios": "^1.7.9",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "firebase": "^11.4.0",
+    "firebase-admin": "^13.1.0",
+    "google-auth-library": "^9.15.1",
+    "googleapis": "^131.0.0",
+    "jquery": "^3.7.1",
+    "node-fetch": "^2.7.0",
+    "undici": "^7.3.0"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.5.2",
+    "tailwindcss": "^4.0.6"
+  }
+}

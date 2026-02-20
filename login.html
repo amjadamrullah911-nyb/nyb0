@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Login Cek Rekening by ZEINIX</title>
+
+  <!-- Hasil build: mengisi window.__FIREBASE_CONFIG__ -->
+  <script src="assets/js/firebaseConfig.js"></script>
+
+  <!-- Firebase (CDN, modular) -->
+  <script type="module">
+    import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
+    import { getAuth, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
+
+    let app, auth;
+
+    // Inisialisasi dari file statis yang dihasilkan saat build
+    function initFirebaseFromWindow() {
+      const cfg = window.__FIREBASE_CONFIG__;
+      if (!cfg || !cfg.apiKey) {
+        console.error("Firebase config kosong / tidak ditemukan. Pastikan prebuild generate file berhasil.");
+        alert("Konfigurasi aplikasi belum tersedia. Coba reload atau hubungi admin.");
+        return;
+      }
+      // Hindari double-init saat user reload
+      app = getApps().length ? getApps()[0] : initializeApp(cfg);
+      auth = getAuth(app);
+      console.log("Firebase initialized (static config) ✅");
+    }
+
+    initFirebaseFromWindow();
+
+    // === Login handler (global) ===
+    window.login = async function () {
+      const email = document.getElementById("email").value.trim();
+      const password = document.getElementById("password").value.trim();
+      const captchaInput = document.getElementById("captcha-input").value.trim();
+      const captchaText = document.getElementById("captcha-text").innerText;
+
+      const errorEl = document.getElementById("error-message");
+      errorEl.innerText = "";
+
+      if (!email || !password || !captchaInput) {
+        errorEl.innerText = "Harap isi semua field.";
+        return;
+      }
+      if (captchaInput !== captchaText) {
+        errorEl.innerText = "Captcha tidak sesuai.";
+        generateCaptcha();
+        return;
+      }
+      if (!auth) {
+        errorEl.innerText = "Aplikasi belum siap. Muat ulang halaman.";
+        return;
+      }
+
+      const btn = document.getElementById("login-button");
+      btn.disabled = true;
+      btn.innerText = "Loading...";
+
+      try {
+        await signInWithEmailAndPassword(auth, email, password);
+        window.location.href = "/index.html";
+      } catch (error) {
+        let msg = "Login Gagal: ";
+        switch (error.code) {
+          case "auth/invalid-email": msg += "Email tidak valid."; break;
+          case "auth/user-disabled": msg += "Akun dinonaktifkan."; break;
+          case "auth/user-not-found": msg += "Akun tidak ditemukan."; break;
+          case "auth/wrong-password":
+          case "auth/invalid-credential": msg += "Silahkan masukkan password yang benar."; break;
+          case "auth/too-many-requests": msg += "Terlalu banyak percobaan login. Coba lagi nanti."; break;
+          default: msg += "Terjadi kesalahan. Silahkan coba lagi.";
+        }
+        errorEl.innerText = msg;
+      } finally {
+        btn.disabled = false;
+        btn.innerText = "Login";
+      }
+    };
+
+    // Captcha util
+    function generateCaptcha() {
+      const text = Math.random().toString(36).substring(2, 8);
+      document.getElementById("captcha-text").innerText = text;
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      document.getElementById("toggle-password").addEventListener("click", function () {
+        const pwd = document.getElementById("password");
+        pwd.type = pwd.type === "password" ? "text" : "password";
+        this.classList.toggle("fa-eye");
+        this.classList.toggle("fa-eye-slash");
+      });
+      generateCaptcha();
+    });
+  </script>
+
+  <!-- Tawk.to (biarkan) -->
+  <script type="text/javascript">
+    var Tawk_API=Tawk_API||{}, Tawk_LoadStart=new Date();
+    (function(){
+      var s1=document.createElement("script"),s0=document.getElementsByTagName("script")[0];
+      s1.async=true;
+      s1.src='https://embed.tawk.to/67cf3a6e6dd272191066bafc/1im0nog63';
+      s1.charset='UTF-8';
+      s1.setAttribute('crossorigin','*');
+      s0.parentNode.insertBefore(s1,s0);
+    })();
+  </script>
+
+  <link rel="stylesheet" href="/assets/css/fonts.css">
+  <link rel="stylesheet" href="/assets/css/fontawesome.min.css">
+  <link rel="stylesheet" href="/assets/css/all.min.css">
+  <link rel="icon" href="favicon.png" type="image/x-icon">
+
+  <style>
+    /* ——— style-mu tetap ——— */
+    body{background:#838486a4;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;font-family:Arial,sans-serif}
+    .container{position:relative;width:100%;max-width:400px;background:#fff;padding:20px;border-radius:8px;box-shadow:0 4px 6px rgba(0,0,0,.1);z-index:10}
+    .container h2{text-align:center;margin-bottom:20px;font-size:24px;font-weight:bold}
+    .input-container{position:relative;display:flex;align-items:center;margin-bottom:10px}
+    .input-container i{position:absolute;color:#4a5568;z-index:1}
+    .input-container i.fa-user,.input-container i.fa-lock{left:10px}
+    .input-container #toggle-password{right:10px;cursor:pointer;background:none;border:none;opacity:.7;transition:opacity .3s}
+    .input-container #toggle-password:hover{opacity:1}
+    .input-container input{width:100%;padding:10px 40px;border:1px solid #cbd5e0;border-radius:4px;outline:none}
+    .input-container input:focus{border-color:#3182ce;box-shadow:0 0 0 2px rgba(66,153,225,.6)}
+    .captcha-container{display:flex;align-items:center;gap:10px}
+    .captcha{display:flex;align-items:center;background:#ebf8ff;padding:10px;border-radius:4px;cursor:pointer}
+    .captcha span{color:#4a5568;margin-right:10px}
+    .captcha i{color:#4a5568;cursor:pointer}
+    .forgot-password{text-align:center;margin:10px 0 20px}
+    .forgot-password a{color:#3182ce;text-decoration:none}
+    .forgot-password a:hover{text-decoration:underline}
+    .container button{width:100%;padding:10px;background:#2b6cb0;color:#fff;border:none;border-radius:4px;cursor:pointer}
+    .container button:hover{background:#2c5282}
+    .container button:disabled{background:#a0aec0;cursor:not-allowed}
+    .error-message{color:red;text-align:center;margin-bottom:10px}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>Login Cek Rekening</h2>
+    <form onsubmit="event.preventDefault(); login();">
+      <div class="input-container">
+        <i class="fas fa-user"></i>
+        <input type="email" id="email" placeholder="Email" required>
+      </div>
+      <div class="input-container">
+        <i class="fas fa-lock"></i>
+        <input type="password" id="password" placeholder="Password" required>
+        <i class="fas fa-eye" id="toggle-password"></i>
+      </div>
+      <div class="captcha-container">
+        <div class="input-container"><input type="text" id="captcha-input" placeholder="Captcha"></div>
+        <div class="captcha"><span id="captcha-text"></span><i class="fas fa-sync-alt" onclick="generateCaptcha()"></i></div>
+      </div>
+      <div class="forgot-password"><a href="/reset-password.html">Forgot Password?</a></div>
+      <div class="error-message" id="error-message"></div>
+      <div><button type="submit" id="login-button">Login</button></div>
+    </form>
+  </div>
+</body>
+</html>

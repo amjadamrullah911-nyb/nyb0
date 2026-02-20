@@ -1,0 +1,31 @@
+/*
+  X-Robots-Tag: noindex
+  X-Frame-Options: DENY
+  Set-Cookie: auth=loggedin; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=43200
+
+/  302 /login.html
+/index.html
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/version.json
+  Cache-Control: no-cache, no-store, must-revalidate
+  Pragma: no-cache
+  Expires: 0
+
+/login.html
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/reset-password.html
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/service-worker.js
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/favicon.png
+  Cache-Control: public, max-age=31536000
+
+/check-account.js
+  Cache-Control: public, max-age=31536000
+
+/validateAccount.js
+  Cache-Control: public, max-age=31536000

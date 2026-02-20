@@ -1,0 +1,4136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cek Rekening</title>
+
+  <!-- Auto Update Checker -->
+  <script>
+  (function() {
+    const APP_VERSION = '2026.01.31.1810';
+    const CHECK_INTERVAL = 15000; // Check setiap 15 detik
+    let lastCheck = Date.now();
+
+    console.log('[AutoUpdate] Current version:', APP_VERSION);
+
+    // Force update service worker
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistration().then(reg => {
+        if (reg) {
+          reg.update(); // Force check for new SW
+          
+          // Listen for new SW waiting
+          reg.addEventListener('updatefound', () => {
+            const newWorker = reg.installing;
+            if (newWorker) {
+              newWorker.addEventListener('statechange', () => {
+                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                  // New SW ready, tell it to skip waiting
+                  newWorker.postMessage({ type: 'SKIP_WAITING' });
+                }
+              });
+            }
+          });
+        }
+      });
+
+      // Reload when new SW takes control
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (!refreshing) {
+          refreshing = true;
+          console.log('[AutoUpdate] New service worker active, reloading...');
+          location.reload(true);
+        }
+      });
+    }
+
+    async function checkForUpdates() {
+      try {
+        // Bypass cache completely
+        const res = await fetch('/version.json?nocache=' + Date.now(), { 
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-cache' }
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        
+        if (data.version && data.version !== APP_VERSION) {
+          console.log('[AutoUpdate] New version available:', data.version, '(current:', APP_VERSION + ')');
+          
+          if (data.forceRefresh) {
+            // Unregister old SW first, then refresh
+            if ('serviceWorker' in navigator) {
+              const regs = await navigator.serviceWorker.getRegistrations();
+              for (const reg of regs) {
+                await reg.unregister();
+              }
+            }
+            // Clear caches
+            if ('caches' in window) {
+              const names = await caches.keys();
+              await Promise.all(names.map(name => caches.delete(name)));
+            }
+            // Show notification then reload
+            showUpdateNotification(data.version);
+          }
+        }
+      } catch (e) {
+        console.warn('[AutoUpdate] Check failed:', e.message);
+      }
+    }
+
+    function showUpdateNotification(newVersion) {
+      // Buat overlay notifikasi
+      const overlay = document.createElement('div');
+      overlay.id = 'update-overlay';
+      overlay.innerHTML = `
+        <div style="
+          position: fixed;
+          top: 0; left: 0; right: 0; bottom: 0;
+          background: rgba(0,0,0,0.8);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 999999;
+          font-family: Arial, sans-serif;
+        ">
+          <div style="
+            background: white;
+            padding: 30px 40px;
+            border-radius: 12px;
+            text-align: center;
+            max-width: 400px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+          ">
+            <div style="font-size: 48px; margin-bottom: 15px;">🔄</div>
+            <h2 style="margin: 0 0 10px; color: #333;">Update Tersedia!</h2>
+            <p style="color: #666; margin: 0 0 20px; font-size: 14px;">
+              Versi baru <strong>${newVersion}</strong> sudah tersedia.<br>
+              Halaman akan di-refresh dalam <span id="update-countdown">5</span> detik.
+            </p>
+            <button onclick="forceReloadPage()" style="
+              background: #2563eb;
+              color: white;
+              border: none;
+              padding: 12px 30px;
+              border-radius: 6px;
+              font-size: 16px;
+              cursor: pointer;
+              font-weight: bold;
+            ">Refresh Sekarang</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+
+      // Countdown dan auto refresh dengan force bypass
+      let countdown = 5;
+      const countdownEl = document.getElementById('update-countdown');
+      const timer = setInterval(() => {
+        countdown--;
+        if (countdownEl) countdownEl.textContent = countdown;
+        if (countdown <= 0) {
+          clearInterval(timer);
+          // Force hard reload dengan URL baru untuk bypass semua cache
+          window.location.href = window.location.pathname + '?v=' + Date.now();
+        }
+      }, 1000);
+    }
+
+    // Fungsi untuk force reload (dipanggil dari button)
+    window.forceReloadPage = function() {
+      window.location.href = window.location.pathname + '?v=' + Date.now();
+    };
+
+    // Check saat page load (delay 5 detik)
+    setTimeout(checkForUpdates, 5000);
+
+    // Check secara berkala
+    setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        checkForUpdates();
+      }
+    }, CHECK_INTERVAL);
+
+    // Check saat tab menjadi aktif kembali
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && Date.now() - lastCheck > CHECK_INTERVAL) {
+        lastCheck = Date.now();
+        checkForUpdates();
+      }
+    });
+
+    // Expose untuk debug
+    window.__APP_VERSION = APP_VERSION;
+    window.__checkForUpdates = checkForUpdates;
+  })();
+  </script>
+
+  <script src="assets/js/jquery.min.js"></script>
+
+  <link rel="stylesheet" href="assets/css/select2.min.css">
+  <script src="assets/js/select2.min.js"></script>
+  <script src="assets/js/qris-mpo-merchant-map.js"></script>
+
+  <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-database-compat.js"></script>
+  <script src="assets/js/firebaseConfig.js"></script>
+
+  <link rel="stylesheet" href="assets/css/fonts.css">
+  <link rel="stylesheet" href="assets/css/fontawesome.min.css">
+  <link rel="stylesheet" href="assets/css/all.min.css">
+  <link rel="icon" href="favicon.png" type="image/x-icon">
+
+  <!--Start of Tawk.to Script-->
+  <script type="text/javascript">
+    var Tawk_API=Tawk_API||{}, Tawk_LoadStart=new Date();
+    (function(){
+      var s1=document.createElement("script"),s0=document.getElementsByTagName("script")[0];
+      s1.async=true;
+      s1.src='https://embed.tawk.to/67cf3a6e6dd272191066bafc/1im0nog63';
+      s1.charset='UTF-8';
+      s1.setAttribute('crossorigin','*');
+      s0.parentNode.insertBefore(s1,s0);
+    })();
+  </script>
+  <!--End of Tawk.to Script-->
+
+<!-- Auth + Session + Logout (gabungan, modular v10) -->
+<script type="module">
+  import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
+  import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
+  import {
+    getDatabase,
+    ref as dbRef,
+    get,
+    child,
+    set,
+    update,
+    remove,
+    serverTimestamp,
+  } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-database.js";
+
+  let app, auth, db;
+
+  document.addEventListener("DOMContentLoaded", init);
+
+  async function init () {
+    try {
+      // 1) Ambil config yg disuntik ke window oleh /assets/js/firebaseConfig.js
+      const cfg = (window && window.__FIREBASE_CONFIG__) || null;
+      if (!cfg || !cfg.apiKey) {
+        console.error("Firebase config kosong. Pastikan /assets/js/firebaseConfig.js ter-load.");
+        alert("Aplikasi belum siap. Reload halaman atau hubungi admin.");
+        return;
+      }
+
+      // 2) Init Firebase (hindari double init)
+      app  = getApps().length ? getApps()[0] : initializeApp(cfg);
+      auth = getAuth(app);
+      db   = getDatabase(app);
+
+      // 3) Bridge utk skrip non-module (prefillOfficer, bind-telegram, dll)
+      window.__FB = {
+        app, auth, db,
+        rtdb: {
+          ref:   (p)    => dbRef(db, p),
+          get:   (r)    => get(r),
+          child: (r, c) => child(r, c),
+          set, update, remove, serverTimestamp,
+        },
+      };
+      window.dispatchEvent(new CustomEvent("firebase-ready"));
+
+      // 4) Session timeout (3 jam) + pencatatan sesi
+      let sessionTimer;
+      const SESSION_TIMEOUT = 180 * 60 * 1000;
+
+      onAuthStateChanged(auth, async (user) => {
+        if (!user) {
+          window.location.href = "/login.html";
+          return;
+        }
+
+        const deviceId     = getOrCreateDeviceId();
+        const sessionStart = Date.now();
+        const sessionRef   = dbRef(db, `sessions/${user.uid}`);
+
+        await set(sessionRef, {
+          deviceId,
+          sessionStart,
+          lastActive: serverTimestamp(),
+          userEmail:  user.email,
+          userId:     user.uid,
+        });
+
+        // Heartbeat activity + absolute timeout
+        startAbsoluteTimeout(sessionStart);
+        ["click","keypress","mousemove","scroll","touchstart"].forEach((ev) => {
+          document.addEventListener(ev, () => {
+            update(sessionRef, { lastActive: serverTimestamp() });
+          }, { passive: true });
+        });
+
+        // Prefill Officer (opsional)
+        if (typeof window.prefillOfficer === "function") {
+          try { window.prefillOfficer(user); } catch (e) { console.warn("prefillOfficer error:", e); }
+        }
+
+        // Telegram Binder (opsional)
+        try {
+          if (window.TelegramBinder?.init) {
+            await window.TelegramBinder.init({ botUsername: "znxalert_bot" });
+            console.log("[Binder] init done (in-auth)");
+          }
+        } catch (e) {
+          console.error("[Binder] init error:", e);
+        }
+
+        // ==== helpers khusus scope onAuth ====
+        function startAbsoluteTimeout (startTime) {
+          clearTimeout(sessionTimer);
+          const remaining = Math.max(0, SESSION_TIMEOUT - (Date.now() - startTime));
+          sessionTimer = setTimeout(forceLogout, remaining);
+        }
+
+        async function forceLogout () {
+          try {
+            await remove(sessionRef);
+            await signOut(auth);
+            alert("Session Expired. Please Relogin");
+          } catch (e) {
+            console.error("forceLogout error:", e);
+          } finally {
+            window.location.href = "/login.html";
+          }
+        }
+      });
+
+      // 5) Tombol LOGOUT
+      const logoutBtn = document.getElementById("logoutBtn");
+      logoutBtn?.addEventListener("click", doLogout);
+
+    } catch (e) {
+      console.error("Initialization error:", e);
+    }
+  }
+
+  async function doLogout () {
+    const btn = document.getElementById("logoutBtn");
+    try {
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Logout...';
+
+      const u = auth?.currentUser;
+      if (u && db) {
+        await remove(dbRef(db, `sessions/${u.uid}`)).catch(()=>{});
+        await signOut(auth);
+      }
+      // bersihkan cache lokal opsional
+      ["deviceId","tg_bind_last"].forEach(k => localStorage.removeItem(k));
+    } catch (e) {
+      console.error("Logout error:", e);
+    } finally {
+      window.location.href = "/login.html";
+    }
+  }
+
+  function getOrCreateDeviceId () {
+    const key = "deviceId";
+    let id = localStorage.getItem(key);
+    if (!id) {
+      id = `dev_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
+      localStorage.setItem(key, id);
+    }
+    return id;
+  }
+</script>
+
+
+  <style>
+    /* ====== style existing (as is) ====== */
+    body{font-family:'Roboto',sans-serif;background:#cbd5e0;display:flex;flex-direction:column;justify-content:space-between;align-items:center;min-height:100vh;margin:0}
+    .container{display:flex;flex:1;justify-content:center;align-items:center;width:100%}
+    .form-container {background-color: rgba(255, 255, 255, 0.8);padding: 24px;border-radius: 8px;box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);width: 100%;max-width: 400px;display: flex;flex-direction: column;justify-content: center;}
+    .form-container h1 {font-size: 24px;margin-bottom: 16px;text-align: center;}
+    .form-container label {font-size: 18px;padding: 5px;margin-top: 5px;margin-bottom: 1px;display: block; }
+    .form-container label[for="akun"] {font-size: 18px; font-weight: bold; color: #333;margin-bottom: 0px;display: block;text-align: left;}
+    .form-container label[for="layanan"] {font-size: 18px;font-weight: bold;color: #333;margin-bottom: 0px;display: block;text-align: left;}
+    .form-container input::placeholder {font-size: 15px;color: #888;}
+    .form-container select,.form-container input {width: 100%;padding: 10px; margin-top: 5px;  margin-bottom: 15px;  border: 1px solid #ccc;border-radius: 4px;}
+    .form-container button{width:100%;padding:14px;background:#4299e1;color:#fff;border:none;border-radius:4px;cursor:pointer;transition:.3s}
+    .form-container button:hover{background:#2b6cb0}
+    .form-container .error-message{color:#e53e3e;text-align:center;margin-top:16px;display:none}
+    .result{margin-top:16px;padding:16px;background:#edf2f7;border:1px solid #cbd5e0;border-radius:4px;display:none}
+    .result p{font-size:18px;font-weight:bold}
+.form-container input,
+.form-container select {
+  box-sizing: border-box;  /* <— penting: lebar termasuk padding+border */
+  height: 44px;
+  font-size: 16px;
+  border-radius: 4px;
+}
+
+/* Select2 agar konsisten */
+.select2-container { 
+  width: 100% !important; 
+  box-sizing: border-box;
+}
+.select2-container .select2-selection--single{
+  height: 44px !important;
+  border: 1px solid #ccc !important;
+  border-radius: 4px !important;
+  box-sizing: border-box;
+}
+.select2-container--default .select2-selection--single .select2-selection__rendered{
+  line-height: 42px !important;
+  padding-left: 10px !important;
+  font-size: 16px;
+}
+.select2-container--default .select2-selection--single .select2-selection__arrow{
+  height: 42px !important;
+  right: 6px !important;
+}
+
+    footer{text-align:center;background:#2d3748;color:#fff;padding:16px;width:100%;position:relative;z-index:1}
+    footer .footer-content{display:flex;align-items:center;justify-content:center;margin-bottom:1px}
+    footer .footer-content img{height:50px;width:50px;margin:0 5px}
+    footer .footer-content p{margin:0}
+    footer .social-links{display:flex;align-items:center;justify-content:center}
+    footer .social-links a{display:flex;align-items:center;justify-content:center;margin-right:60px;color:#fff;text-decoration:none}
+    footer .social-links img{width:30px;height:30px;margin-right:5px;margin-bottom:10px}
+    footer .social-links strong{font-size:14px;color:#fff;text-decoration:none;margin-right:6px;margin-bottom:10px}
+
+/* ==== perbaikan tombol pojok kiri ==== */
+.top-left{
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  z-index: 1000;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+/* semua tombol di bar kiri TIDAK full width */
+.top-left button,
+.top-left .btn{
+  width: auto !important;
+  white-space: nowrap;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+/* pecah baris supaya tombol reset ada di bawah 3 tombol lama */
+.top-left .row-break{ flex-basis: 100%; height: 0; }
+
+/* opsional: batasi lebar maksimum */
+#btn-reset-member{ max-width: 260px; }
+
+
+
+    .password-form-container{display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;padding:20px;border-radius:8px;box-shadow:0 4px 6px rgba(0,0,0,.1);width:90%;max-width:400px;z-index:1001}
+    .password-form-container h2{text-align:center;margin-bottom:20px;font-size:1.25rem}
+    .password-input-group{margin-bottom:15px}
+    .password-input-group label{display:block;margin-bottom:5px;color:#4a5568}
+    .password-input-group input{width:100%;padding:8px;border:1px solid #cbd5e0;border-radius:4px}
+    .password-buttons{display:flex;gap:10px;margin-top:20px}
+    .password-buttons button{flex:1;padding:10px;border-radius:4px;cursor:pointer}
+    .password-submit{background:#4299e1;color:#fff;border:none}
+    .password-cancel{background:#e53e3e;color:#fff;border:none}
+    .password-message{margin-top:15px;padding:10px;border-radius:4px;text-align:center;display:none}
+    .password-success{background-color:rgba(56,161,105,0.1);color:#38a169;border-left:4px solid #38a169}
+    .password-error{background-color:rgba(229,62,62,0.1);color:#e53e3e;border-left:4px solid #e53e3e}
+    .loading-spinner{display:inline-block;width:16px;height:16px;border:3px solid rgba(255,255,255,0.3);border-radius:50%;border-top-color:#fff;animation:spin 1s ease-in-out infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+
+    /* ===== [TAMBAHAN] Style Form Request Support (fmt-*) ===== */
+    :root{--fmt-primary:#005a9e;--fmt-primary-hover:#00447a;--fmt-accent:#FFD500;--fmt-accent-hover:#e6c200}
+    .fmt-container{max-width:380px;margin:30px auto 60px;background:#fff;border-radius:10px;box-shadow:0 6px 20px rgba(2,6,23,.08);padding:20px 22px}
+    .fmt-container[hidden]{display:none!important}
+    .fmt-container h2{margin:0 0 12px;text-align:center;font-size:18px}
+    .fmt-container label{display:block;margin-top:10px;font-weight:600;font-size:14px}
+    .fmt-container input,.fmt-container select,.fmt-container textarea{width:100%;padding:9px 10px;margin-top:4px;border-radius:8px;border:1px solid #cfcfcf;font-size:14px;background:#fff;color:#111;box-sizing:border-box;transition:.12s}
+    .fmt-message{margin-top:10px;padding:10px;border-radius:8px;background:#fbfbfb;border:1px solid #e7e7e7;white-space:pre-line;font-size:14px}
+    .fmt-warning{color:#e03e2d;margin-top:4px;font-size:13px;display:none}
+    .fmt-warning.show{display:block}
+    .fmt-btn{width:100%;padding:10px;border-radius:8px;border:0;cursor:pointer;font-weight:700;font-size:15px;display:inline-flex;align-items:center;justify-content:center;gap:8px;transition:.2s}
+    .fmt-btn.primary{background:var(--fmt-primary);color:#fff}
+    .fmt-btn.primary:hover{background:var(--fmt-primary-hover)}
+    .fmt-btn.accent{background:var(--fmt-accent);color:#000}
+    .fmt-btn.accent:hover{background:var(--fmt-accent-hover)}
+    .fmt-controls{margin-top:12px;display:flex;flex-direction:column;gap:8px}
+    .fmt-row{display:flex;gap:8px}
+    .fmt-note-btn{padding:6px 10px;border:1px solid #cfcfcf;border-radius:6px;background:#fff;color:#111;cursor:pointer;font-size:13px}
+    .fmt-note-btn.active{background:var(--fmt-primary);color:#fff;border-color:var(--fmt-primary)}
+    .fmt-status{display:none;text-align:center;font-size:13px;margin-top:8px}
+    .status-ok{background-color:rgba(56,161,105,.1);color:#2f855a;border-left:4px solid #38a169;padding:10px;border-radius:6px}
+    .status-err{background-color:rgba(229,62,62,.1);color:#e53e3e;border-left:4px solid #e53e3e;padding:10px;border-radius:6px}
+  /* === Media uploader (drag & drop + paste + multi file) === */
+    .fmt-media{margin-top:10px}
+    .fmt-dropzone{
+    border:2px dashed #cfd6e4;border-radius:10px;padding:14px;
+    text-align:center;background:#fbfcff;cursor:pointer;outline:none;transition:.15s
+    }
+    .fmt-dropzone.dragover,.fmt-dropzone:focus{border-color:#005a9e;background:#f0f6ff}
+    .dz-instruction{font-size:13px;color:#334155}
+    .dz-instruction .dz-filelink{color:#005a9e;text-decoration:underline;cursor:pointer}
+    .fmt-previews{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+    .thumb{position:relative;width:92px;height:92px;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);background:#e7eef7}
+    .thumb img{width:100%;height:100%;object-fit:cover;display:block}
+    .thumb .rm{
+    position:absolute;right:4px;top:4px;border:0;border-radius:999px;width:22px;height:22px;
+    background:#ef4444;color:#fff;font-size:12px;cursor:pointer;line-height:22px
+    }
+    .fmt-hint{margin-top:6px;font-size:12px;color:#64748b}
+/* ========== RESET PASSWORD MEMBER — CLEAN CSS ========== */
+:root{
+  --rp-border:#d1d5db;
+  --rp-border-strong:#e5e7eb;
+  --rp-bg:#ffffff;
+  --rp-shadow:0 16px 40px rgba(2,6,23,.25);
+  --rp-text:#111827;
+  --rp-muted:#6b7280;
+  --rp-label:#374151;
+  --rp-ring:#2563eb;
+  --rp-primary:#2563eb;
+  --rp-success:#10b981;
+  --rp-gray:#6b7280;
+}
+
+*,
+*::before,
+*::after{ box-sizing:border-box; }
+
+/* ---- Overlay & Card ---- */
+.rpm-overlay{
+  position:fixed; inset:0; display:none; align-items:center; justify-content:center;
+  background:rgba(0,0,0,.45); z-index:10000; padding:16px;
+}
+.rpm-overlay.show{ display:flex; }
+
+.rpm-card{
+  width:100%; max-width:720px; background:var(--rp-bg); border-radius:12px;
+  border:1px solid var(--rp-border-strong); box-shadow:var(--rp-shadow); overflow:hidden;
+}
+
+/* ---- Header ---- */
+.rpm-header{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:14px 16px; border-bottom:1px solid var(--rp-border-strong);
+  font:600 16px/20px system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial;
+  color:var(--rp-text);
+}
+.rpm-close{
+  border:0; background:transparent; cursor:pointer; font-size:18px; line-height:1;
+  color:#6b7280; padding:4px 6px; border-radius:6px;
+}
+.rpm-close:hover{ background:#f3f4f6; color:#111827; }
+
+/* ---- Body ---- */
+.rpm-body{ padding:16px; }
+
+.rpm-grid{ display:grid; gap:12px; }
+.rpm-grid-2{ display:grid; gap:12px; grid-template-columns:1fr; }
+@media (min-width:680px){
+  .rpm-grid-2{ grid-template-columns:1fr 1fr; column-gap:12px; }
+}
+
+/* ---- Fields ---- */
+.rpm-field label{
+  display:block; margin:0 0 6px; font:600 13px/18px system-ui; color:var(--rp-label);
+}
+.rpm-input,
+.rpm-select{
+  width:100%; height:42px; padding:8px 10px; border:1px solid var(--rp-border);
+  border-radius:8px; background:#fff; color:var(--rp-text);
+  font:14px/20px system-ui; outline:none; transition:box-shadow .12s, border-color .12s;
+}
+.rpm-input::placeholder{ color:#9aa3af; }
+.rpm-input:focus,
+.rpm-select:focus{
+  border-color:var(--rp-ring);
+  box-shadow:0 0 0 3px rgba(37,99,235,.15);
+}
+.rpm-select{ appearance:none; background-image:linear-gradient(45deg,transparent 50%,#9aa3af 50%),linear-gradient(135deg,#9aa3af 50%,transparent 50%); background-position:calc(100% - 18px) 50%, calc(100% - 13px) 50%; background-size:6px 6px, 6px 6px; background-repeat:no-repeat; padding-right:28px; }
+
+/* ---- Actions ---- */
+.rpm-actions{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:4px; }
+.rpm-actions .push-right{ margin-left:auto; }
+
+.rpm-btn{
+  height:38px; padding:0 12px; border-radius:8px; border:1px solid transparent;
+  background:#f3f4f6; color:var(--rp-text); cursor:pointer; font:600 13px/38px system-ui;
+  white-space:nowrap;
+}
+.rpm-btn.primary{ background:var(--rp-primary); color:#fff; }
+.rpm-btn.success{ background:var(--rp-success); color:#fff; }
+.rpm-btn.gray{ background:var(--rp-gray); color:#fff; }
+.rpm-btn:hover:not(:disabled){ filter:brightness(.97); }
+.rpm-btn:active:not(:disabled){ transform:translateY(1px); }
+.rpm-btn:disabled{ opacity:.55; cursor:not-allowed; }
+
+/* ---- Badge & hint ---- */
+#rpm-badge{
+  display:none; margin:0 0 10px; padding:8px 10px; border-radius:10px;
+  background:#f0f9ff; border:1px solid #bae6fd; color:#0369a1; font:600 12px/18px system-ui;
+}
+.rpm-hint{ margin-top:8px; font:500 12px/18px system-ui; color:#059669; }
+.rpm-note{ margin-top:8px; font:12px/18px system-ui; color:var(--rp-muted); }
+
+/* ---- Result ---- */
+.rpm-result-box{
+  border:1px dashed var(--rp-border); border-radius:8px; padding:10px; white-space:pre-wrap;
+  background:#f8fafc;
+  font:13px/18px ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+/* ---- Utility ---- */
+.hidden{ display:none !important; }
+
+/* ---- Top-left toolbar: jangan full width ---- */
+.top-left{ position:fixed; top:10px; left:10px; z-index:1000; }
+.top-left button,
+.top-left .btn{
+  width:auto !important; display:inline-flex; align-items:center; gap:6px;
+  padding:6px 10px; font-size:12px; line-height:1; white-space:nowrap;
+  border-radius:6px; border:1px solid var(--rp-border); background:#fff; color:#111;
+}
+.top-left button:hover{ background:#f8fafc; }
+
+@media (max-width: 720px){
+  #rpm-modal .rpm-grid-two {
+    grid-template-columns: 1fr !important;
+  }
+}
+button[type="submit"].btn-loading {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+#accountOwner,
+#accountBank,
+#accountNumberResult {
+  text-transform: uppercase;
+}
+
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="form-container">
+      <h1>Cek Rekening</h1>
+      <form id="rekening-form">
+        <label for="layanan">Pilih BANK</label>
+                <select id="layanan" name="layanan">
+                    <option value="">Silahkan Pilih Bank</option>
+                    <option value="DANA">DANA</option>
+                    <option value="OVO">OVO</option>
+                    <option value="GOPAY">GOPAY</option>
+                    <option value="LINKAJA">LINKAJA</option>
+                    <option value="SHOPEEPAY">SHOPEEPAY</option>
+                    <option value="SAKUKU">SAKUKU</option>
+                    <option value="014">Bank Central Asia (014)</option>
+                    <option value="008">Bank Mandiri (008)</option>
+                    <option value="009">BNI (Bank Negara Indonesia) (009)</option>
+                    <option value="002">Bank Rakyat Indonesia (002)</option>
+                    <option value="451">BANK SYARIAH INDONESIA (451)</option>
+                    <option value="022">CIMB Niaga & CIMB Niaga Syariah (022)</option>
+                    <option value="147">Muamalat (147)</option>
+                    <option value="213">SMBC / Jenius (213)</option>
+                    <option value="200">BTN/BTN Syariah (200)</option>
+                    <option value="013">Bank Permata (013)</option>
+                    <option value="011">Bank Danamon (011)</option>
+                    <option value="016">Bank Maybank (016)</option>
+                    <option value="426">BANK MEGA (426)</option>
+                    <option value="153">Bank Sinarmas (153)</option>
+                    <option value="950">Commonwealth Bank (950)</option>
+                    <option value="028">OCBC NISP (028)</option>
+                    <option value="441">Wokee/Bukopin (441)</option>
+                    <option value="536">BANK BCA SYARIAH (536)</option>
+                    <option value="031">Citibank (031)</option>
+                    <option value="019">Panin Bank (019)</option>
+                    <option value="425">BJB (425)</option>
+                    <option value="111">Bank DKI Jakarta (111)</option>
+                    <option value="112">BANK PEMBANGUNAN DAERAH DIY (112)</option>
+                    <option value="113">BANK PEMBANGUNAN DAERAH JAWA TENGAH (113)</option>
+                    <option value="114">BANK PEMBANGUNAN DAERAH JATIM (114)</option>
+                    <option value="115">Bank Jambi (115)</option>
+                    <option value="116">Bank Aceh Syariah (116)</option>
+                    <option value="117">Bank Sumut (117)</option>
+                    <option value="118">BANK NAGARI (118)</option>
+                    <option value="119">BANK PEMBANGUNAN DAERAH RIAU KEPRI (119)</option>
+                    <option value="120">BPD SUMSEL DAN BABEL (120)</option>
+                    <option value="121">Bank Lampung (121)</option>
+                    <option value="122">BANK PEMBANGUNAN DAERAH KALSEL (122)</option>
+                    <option value="123">BANK PEMBANGUNAN DAERAH KALBAR (123)</option>
+                    <option value="124">BANK PEMBANGUNAN DAERAH KALTIM (124)</option>
+                    <option value="125">BPD KALIMANTAN TENGAH (125)</option>
+                    <option value="126">Bank Sulselbar (126)</option>
+                    <option value="127">Bank SulutGo (127)</option>
+                    <option value="128">BANK PEMBANGUNAN DAERAH NTB (128)</option>
+                    <option value="129">BPD Bali (129)</option>
+                    <option value="130">BANK PEMBANGUNAN DAERAH NTT (130)</option>
+                    <option value="131">Bank Maluku (131)</option>
+                    <option value="132">Bank Papua (132)</option>
+                    <option value="133">Bank Bengkulu (133)</option>
+                    <option value="134">BPD SULAWESI TENGAH (134)</option>
+                    <option value="135">BPD SULAWESI TENGGARA (135)</option>
+                    <option value="023">TMRW/UOB (023)</option>
+                    <option value="032">KC JPMORGAN CHASE BANK, N.A. (032)</option>
+                    <option value="033">BANK OF AMERICA NA (033)</option>
+                    <option value="037">Bank Artha Graha Internasional (037)</option>
+                    <option value="041">HSBC Indonesia (041)</option>
+                    <option value="042">THE BANK OF TOKYO MITSUBISHI UFJ LTD. (042)</option>
+                    <option value="045">BANK SUMITOMO MITSUI INDONESIA (045)</option>
+                    <option value="046">DBS Indonesia (046)</option>
+                    <option value="047">Bank Resona Perdania (047)</option>
+                    <option value="048">Bank Mizuho Indonesia (048)</option>
+                    <option value="050">STANDARD CHARTERED BANK (050)</option>
+                    <option value="052">Bank Capital Indonesia (052)</option>
+                    <option value="057">Bank BNP Paribas (057)</option>
+                    <option value="110">BANK JABAR BANTEN SYARIAH (110)</option>
+                    <option value="061">ANZ Indonesia (061)</option>
+                    <option value="067">Deutsche Bank (067)</option>
+                    <option value="068">Bank Woori Saudara (068)</option>
+                    <option value="076">BANK BUMI ARTA (076)</option>
+                    <option value="087">BANK EKONOMI RAHARJA (087)</option>
+                    <option value="036">Bank CCB Indonesia (036)</option>
+                    <option value="095">BANK JTRUST INDONESIA (095)</option>
+                    <option value="097">Bank Mayapada (097)</option>
+                    <option value="146">Bank of India Indonesia (146)</option>
+                    <option value="151">BANK MESTIKA DHARMA (151)</option>
+                    <option value="152">BANK METRO EXPRESS (152)</option>
+                    <option value="156">Bank Maspion Indonesia (156)</option>
+                    <option value="161">Bank Ganesha (161)</option>
+                    <option value="164">ICBC Indonesia (164)</option>
+                    <option value="167">Bank QNB Indonesia (167)</option>
+                    <option value="459">Bank Bisnis Internasional (459)</option>
+                    <option value="472">Bank Jasa Jakarta (472)</option>
+                    <option value="485">BANK MNC INTERNASIONAL (485)</option>
+                    <option value="490">Bank Neo Commerce (490)</option>
+                    <option value="494">BANK RAYA INDONESIA (494)</option>
+                    <option value="498">BANK SBI INDONESIA (498)</option>
+                    <option value="501">BLU BCA (501)</option>
+                    <option value="503">BANK NATIONALNOBU (503)</option>
+                    <option value="506">BANK MEGA SYARIAH (506)</option>
+                    <option value="513">Bank Ina Perdana (513)</option>
+                    <option value="520">Prima Master Bank (520)</option>
+                    <option value="523">BANK DIPO INTERNATIONAL (523)</option>
+                    <option value="531">Anglomas International Bank (531)</option>
+                    <option value="535">SEABANK (535)</option>
+                    <option value="542">Jago/Artos (542)</option>
+                    <option value="362">BANK PURBA DANARTA (362)</option>
+                    <option value="363">BANK MULTI ARTA SENTOSA (363)</option>
+                    <option value="553">Bank Mayora Indonesia (553)</option>
+                    <option value="555">Bank Index Selindo (555)</option>
+                    <option value="559">Centratama Nasional Bank (559)</option>
+                    <option value="562">Bank Fama International (562)</option>
+                    <option value="564">Bank Mandiri Taspen (564)</option>
+                    <option value="566">BANK VICTORIA INTERNATIONAL (566)</option>
+                    <option value="567">Allo Bank/Bank Harda Internasional (567)</option>
+                    <option value="688">BPR KS (688)</option>
+                    <option value="945">Bank IBK Indonesia (945)</option>
+                    <option value="949">CTBC (Chinatrust) Indonesia (949)</option>
+                    <option value="003">Bank Ekspor Indonesia (003)</option>
+                </select>
+
+        <label for="akun">Nomor Rekening</label>
+        <input type="text" id="akun" name="akun" placeholder="Masukan Nomor Rekening">
+
+        <button type="submit">Check</button>
+
+        <div id="error-message" class="error-message">Rekening tidak valid. Mohon masukan nomor rekening yang benar</div>
+      </form>
+
+      <div id="result" class="result">
+        <p><span id="accountOwner"></span></p>
+        <p><span id="accountBank"></span></p>
+        <p><span id="accountNumberResult"></span></p>
+      </div>
+    </div>
+  </div>
+
+<!-- TOP-LEFT actions -->
+<div class="top-left">
+  <button id="supportToggleBtn" title="Form Request Support">
+    <i class="fas fa-headset"></i> Form Request Support
+  </button>
+  <button id="changePasswordBtn"><i class="fas fa-key"></i> Change Password</button>
+  <button id="logoutBtn"><i class="fas fa-sign-out-alt"></i> Logout</button>
+
+  <span class="row-break"></span> <!-- bikin baris baru -->
+
+  <button id="btn-reset-member"
+        type="button"
+        class="btn btn-sm"
+        style="margin:6px 6px 0 6px;"
+        onclick="window.rpmOpen && window.rpmOpen();">
+  🔐 Bank for Reset Password Member
+</button>
+</div>
+
+
+      <!-- Form Request Support -->
+      <div class="fmt-container" id="fmt-app" hidden aria-hidden="true">
+        <h2>Form Request Support</h2>
+
+        <label for="fmt-officer">Officer</label>
+        <input id="fmt-officer" type="text" placeholder="Ketik nama Officer (min 3 huruf)">
+
+        <label for="fmt-category">Pilih Jenis Permintaan</label>
+        <select id="fmt-category">
+          <option value="">-- Pilih --</option>
+          <option value="reset">Reset Password</option>
+          <option value="turnover">Turn Over</option>
+          <option value="lock">Lock Balance</option>
+          <option value="bonusexpired">Bonus Expired</option>
+          <option value="ongoingto">Ongoing Turnover</option>
+          <option value="claimbonusvip">Klaim Bonus VIP</option>
+          <option value="claimkycref">Klaim Bonus KYC Referal</option>
+          <option value="requestkyc">Request KYC</option>
+          <option value="saldohilang">Saldo Hilang</option>
+          <option value="validasi">Validasi Account</option>
+          <option value="duplicateid">Duplicate ID</option>
+          <option value="defaultbank">Change Default Bank</option>
+          <option value="deposit">DEPOSIT</option>
+          <option value="addrekening">Add New Rekening</option>
+          <option value="wdproof">Request Bukti Transfer </option>
+        </select>
+
+        <label for="fmt-channel">Tujuan Format (Grup Telegram)</label>
+        <select id="fmt-channel">
+          <option value="">— Pilih Grup —</option>
+          <option value="CHARLIE_RESET_PASSWORD">CHARLIE RESET PASSWORD</option>
+          <option value="NEW_COMPLIENCE_ALPHA">NEW COMPLIENCE ALPHA</option>
+          <option value="CHARLIE_ALL_INFORMATION">CHARLIE ALL INFORMATION</option>
+          <option value="CHARLIE_CONFIRM_PULSA">CHARLIE CONFIRM PULSA</option>
+          <option value="CHARLIE_EMONEY_NEXUSPAY">CHARLIE - EMONEY NEXUSPAY</option>
+          <option value="CHARLIE_WD_BUKTI_REJECT_NOT_VALID">CHARLIE WD BUKTI,REJECT,NOT VALID</option>
+        </select>
+
+        <div id="fmt-form-area" style="margin-top:10px;"></div>
+
+        <!-- Lampiran gambar -->
+        <div id="fmt-media-wrap" class="fmt-media">
+        <label>Lampiran Gambar / Screenshot</label>
+        <div id="fmt-dropzone" class="fmt-dropzone" tabindex="0">
+            <div class="dz-instruction">
+            <strong>Drag & drop</strong> gambar ke sini, atau
+            <span class="dz-filelink">pilih file</span>.<br>
+            Kamu juga bisa <em>Paste</em> (Ctrl/Cmd+V) screenshot langsung.
+            </div>
+            <input id="fmt-file" type="file" accept="image/*" multiple hidden>
+        </div>
+        <div id="fmt-previews" class="fmt-previews" aria-live="polite"></div>
+        <div id="fmt-media-hint" class="fmt-hint">
+            Maks. 10 gambar per kirim (batas Telegram). Ukuran ideal ≤ 8 MB / gambar.
+        </div>
+        </div>
+
+        <div class="fmt-controls">
+          <button id="fmt-unsuspend" class="fmt-btn accent" style="display:none">+ Unsuspend</button>
+          <div class="fmt-row">
+            <button id="fmt-copy" class="fmt-btn accent" style="flex:1">Copy</button>
+            <button id="fmt-send" class="fmt-btn primary" style="flex:1">Kirim ke Telegram</button>
+          </div>
+          <div id="fmt-copyNotice" class="fmt-status status-ok">✅ Teks berhasil disalin!</div>
+          <div id="fmt-sendStatus" class="fmt-status"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Change Password (as is) -->
+  <div id="passwordFormContainer" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;padding:20px;border-radius:8px;box-shadow:0 4px 6px rgba(0,0,0,.1);z-index:1001;width:90%;max-width:400px;">
+    <h2 style="text-align:center;margin-bottom:20px;">Change Password</h2>
+    <form id="passwordChangeForm">
+      <div style="margin-bottom:15px;">
+        <label style="display:block;margin-bottom:5px;">Current Password</label>
+        <input type="password" id="currentPassword" required style="width:100%;padding:8px;border:1px solid #ccc;border-radius:4px;">
+      </div>
+      <div style="margin-bottom:15px;">
+        <label style="display:block;margin-bottom:5px;">New Password</label>
+        <input type="password" id="newPassword" required style="width:100%;padding:8px;border:1px solid #ccc;border-radius:4px;">
+      </div>
+      <div style="margin-bottom:20px;">
+        <label style="display:block;margin-bottom:5px;">Confirm New Password</label>
+        <input type="password" id="confirmPassword" required style="width:100%;padding:8px;border:1px solid #ccc;border-radius:4px;">
+      </div>
+      <div style="display:flex;gap:10px;">
+        <button type="submit" style="flex:1;padding:10px;background:#4299e1;color:#fff;border:none;border-radius:4px;cursor:pointer;">
+          <span id="submitText">Change Password</span>
+        </button>
+        <button type="button" id="cancelPasswordChange" style="flex:1;padding:10px;background:#e53e3e;color:#fff;border:none;border-radius:4px;cursor:pointer;">
+          Cancel
+        </button>
+      </div>
+      <div id="passwordChangeMessage" style="margin-top:15px;padding:10px;border-radius:4px;text-align:center;display:none;"></div>
+    </form>
+  </div>
+
+  <footer class="footer">
+    <div class="footer-content">
+      <p class="footer-content">&copy; 2025</p>
+      <img alt="Logo of the website" src="assets/images/ZEINIX.png" width="50">
+      <p class="ml-2">All Rights Reserved.</p>
+    </div>
+    <div class="footer-content">
+      <a href="https://www.youtube.com/@bon4rwave" target="_blank" rel="noopener noreferrer" class="social-links">
+        <img src="assets/images/youtube_icon.png" alt="YouTube Logo" width="40" height="40"><strong>YouTube</strong>
+      </a>
+      <a href="https://www.instagram.com/_zeinix/" target="_blank" rel="noopener noreferrer" class="social-links">
+        <img src="assets/images/instagram_icon.png" alt="Instagram Logo" width="40" height="40"><strong>Instagram</strong>
+      </a>
+    </div>
+  </footer>
+
+  <!-- ===== existing: Select2 + CEK REKENING handler (TIDAK DIUBAH) ===== -->
+<script>
+  $(document).ready(() => { $('#layanan').select2(); });
+
+  const rekeningForm = document.getElementById('rekening-form');
+  const checkBtn     = rekeningForm.querySelector('button[type="submit"]');
+  const CHECK_BTN_DEFAULT_TEXT = checkBtn ? checkBtn.textContent : 'Check';
+
+  function setChecking(isChecking) {
+    if (!checkBtn) return;
+    if (isChecking) {
+      checkBtn.disabled = true;
+      checkBtn.textContent = 'Checking...';
+      checkBtn.classList.add('btn-loading');
+    } else {
+      checkBtn.disabled = false;
+      checkBtn.textContent = CHECK_BTN_DEFAULT_TEXT;
+      checkBtn.classList.remove('btn-loading');
+    }
+  }
+
+  rekeningForm.addEventListener('submit', handleRekeningFormSubmit);
+
+  async function handleRekeningFormSubmit(e) {
+    e.preventDefault();
+    const layanan = document.getElementById('layanan').value;
+    const akun    = document.getElementById('akun').value.trim();
+    if (!validateForm(layanan, akun)) return;
+
+    const payload = { kode_bank: layanan, nomor_rekening: akun };
+
+    setChecking(true); // <-- mulai loading
+
+    try {
+      const response = await fetch('/.netlify/functions/check-account', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await response.json();
+      console.log("Serverless Function Response:", data);
+
+      if (response.ok && data.success) {
+        showResult(data.data);
+      } else {
+        showError(data.message || "Terjadi kesalahan tak terduga. Silakan coba lagi.");
+      }
+    } catch (error) {
+      console.error('Terjadi kesalahan:', error);
+      showError("Terjadi kesalahan koneksi. Coba lagi nanti.");
+    } finally {
+      setChecking(false); // <-- matikan loading apapun hasilnya
+    }
+  }
+
+  function validateForm(layanan, akun) {
+    if (!layanan) { alert("Harap pilih bank terlebih dahulu!"); return false; }
+    if (!akun || !/^\d+$/.test(akun)) { alert("Nomor akun hanya boleh berisi angka!"); return false; }
+    return true;
+  }
+
+  function showResult(accountData) {
+    document.getElementById('result').style.display = 'block';
+    document.getElementById('accountOwner').innerText        = accountData.nama_pemilik || 'Tidak Ditemukan';
+    document.getElementById('accountBank').innerText         = accountData.nama_bank || 'Tidak Ditemukan';
+    document.getElementById('accountNumberResult').innerText = accountData.nomor_rekening || 'Tidak Ditemukan';
+    document.getElementById('error-message').style.display   = 'none';
+  }
+  function showError(message) {
+    hideResult();
+    document.getElementById('error-message').innerText = message;
+    document.getElementById('error-message').style.display = 'block';
+  }
+  function hideResult() {
+    document.getElementById('result').style.display = 'none';
+    document.getElementById('error-message').style.display = 'none';
+  }
+
+  // ETag check (as is)
+  const ETag_INTERVAL = 86400000;
+  setInterval(checkForUpdatesWithETag, ETag_INTERVAL);
+  async function checkForUpdatesWithETag() {
+    const lastETag = localStorage.getItem('lastETag');
+    const headers = new Headers();
+    if (lastETag) headers.append('If-None-Match', lastETag);
+    try {
+      const response = await fetch('/.netlify/functions/check-updates', { headers });
+      if (response.status === 304) return;
+      const data = await response.json();
+      const newETag = response.headers.get('ETag');
+      if (newETag) localStorage.setItem('lastETag', newETag);
+      if (data.updateAvailable) location.reload();
+    } catch (e) { console.error('Error checking updates:', e); }
+  }
+
+  // SW register (as is)
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/service-worker.js').then(reg=>{
+      console.log('SW scope:', reg.scope);
+      if (reg.waiting) { reg.waiting.postMessage({type:'SKIP_WAITING'}); reloadPage('SW waiting, reload…'); }
+      reg.onupdatefound = () => {
+        const nw = reg.installing;
+        nw.onstatechange = () => {
+          if (nw.state === 'installed') {
+            if (navigator.serviceWorker.controller) { nw.postMessage({type:'SKIP_WAITING'}); reloadPage('SW installed, reload…'); }
+          }
+        };
+      };
+    }).catch(err=>console.error('SW reg failed:', err));
+
+    navigator.serviceWorker.addEventListener('message', e=>{
+      if (e.data?.type === 'RELOAD_PAGE') reloadPage('Reload to activate new SW…');
+    });
+  }
+  function reloadPage(msg){ console.log(msg); window.location.reload(); }
+</script>
+
+
+<!-- ===== Prefill Officer (USERNAME only, no email/no full name) ===== -->
+<script>
+  // cek string mirip email
+  const isEmailLike = (s) => /@/.test(String(s || ''));
+
+  // key untuk officersByEmail: ganti "." jadi "," (sesuai struktur DB)
+  const encodeEmailKey = (email) =>
+    (email || '').trim().toLowerCase().replace(/\./g, ',');
+
+  // tunggu Firebase ready (sesuai binder kamu)
+  const fbReady = () =>
+    new Promise((resolve) => {
+      if (window.__FB?.rtdb?.ref) return resolve();
+      window.addEventListener('firebase-ready', () => resolve(), { once: true });
+    });
+
+  async function tryGet(path) {
+    try {
+      await fbReady();
+      const { rtdb } = window.__FB;
+      const root = rtdb.ref('/');
+      const snap = await rtdb.get(rtdb.child(root, path));
+      if (!snap.exists()) {
+        console.log('[officer-prefill] no data at', path);
+        return null;
+      }
+      return snap.val() || {};
+    } catch (e) {
+      console.warn('[officer-prefill] read error', path, e);
+      return null;
+    }
+  }
+
+  async function prefillOfficer(user) {
+    const input = document.getElementById('fmt-officer');
+    if (!input) return;
+
+    // --- bersihkan & pakai cache kalau valid ---
+    const cacheKey = 'officerCachedUsername';
+    const cached = localStorage.getItem(cacheKey);
+
+    if (cached && isEmailLike(cached)) {
+      // kalau entah kenapa isinya email, buang
+      localStorage.removeItem(cacheKey);
+    }
+
+    const cached2 = localStorage.getItem(cacheKey);
+    if (cached2 && !isEmailLike(cached2)) {
+      input.value = cached2;
+      input.readOnly = true;
+      input.title = 'Diisi otomatis (cache)';
+      console.log('[officer-prefill] from cache:', cached2);
+      return;
+    }
+
+    let username = '';
+
+    // --- 1) officersByEmail /<encoded email> ---
+    const emailKey = encodeEmailKey(user?.email || '');
+    if (emailKey) {
+      const map = await tryGet('officersByEmail/' + emailKey);
+      if (map) {
+        const cand = [
+          map.username,
+          map.officer,
+          map.userName,
+          map.uname,
+        ]
+          .map(v => String(v || '').trim())
+          .find(v => v && !isEmailLike(v));
+
+        if (cand) {
+          username = cand;
+          console.log('[officer-prefill] from officersByEmail:', username);
+        }
+      }
+    }
+
+    // --- 2) users/$uid (hanya field username-like) ---
+    if (!username && user?.uid) {
+      const u = await tryGet('users/' + user.uid);
+      if (u) {
+        const cand = [
+          u.username,
+          u.officer,
+          u.userName,
+        ]
+          .map(v => String(v || '').trim())
+          .find(v => v && !isEmailLike(v));
+
+        if (cand) {
+          username = cand;
+          console.log('[officer-prefill] from users:', username);
+        }
+      }
+    }
+
+    // --- 3) profiles/$uid (juga hanya field username-like) ---
+    if (!username && user?.uid) {
+      const p = await tryGet('profiles/' + user.uid);
+      if (p) {
+        const cand = [
+          p.username,
+          p.officer,
+          p.userName,
+        ]
+          .map(v => String(v || '').trim())
+          .find(v => v && !isEmailLike(v));
+
+        if (cand) {
+          username = cand;
+          console.log('[officer-prefill] from profiles:', username);
+        }
+      }
+    }
+
+    // --- TIDAK ADA: displayName, name, olahan dari email ---
+    // Kalau tetap nggak dapat => biarkan user isi manual.
+
+    if (username && !isEmailLike(username)) {
+      input.value = username;
+      input.readOnly = true;
+      input.title = 'Diisi otomatis dari akun/login (username)';
+      localStorage.setItem(cacheKey, username);
+    } else {
+      input.value = '';
+      input.readOnly = false;
+      input.title = 'Silakan isi username officer';
+      localStorage.removeItem(cacheKey);
+      console.log('[officer-prefill] no valid username found, manual input');
+    }
+  }
+
+  // dipanggil dari onAuthStateChanged di script auth utama
+  window.prefillOfficer = prefillOfficer;
+</script>
+
+
+
+
+  <!-- ===== [TAMBAHAN] Toggle + Logic Form Request Support ===== -->
+  <script>
+    // Toggle tampil/simpan fokus
+    (function(){
+      const btn = document.getElementById('supportToggleBtn');
+      const box = document.getElementById('fmt-app');
+      if (!btn || !box) return;
+
+      btn.addEventListener('click', ()=>{
+        const hidden = box.hasAttribute('hidden');
+        if (hidden){
+          box.removeAttribute('hidden');
+          box.setAttribute('aria-hidden','false');
+          setTimeout(()=>document.getElementById('fmt-officer')?.focus(),150);
+          box.scrollIntoView({behavior:'smooth', block:'start'});
+        } else {
+          box.setAttribute('hidden','');
+          box.setAttribute('aria-hidden','true');
+        }
+      });
+
+      window.addEventListener('keydown', (e)=>{
+        if (e.key === 'Escape' && !box.hasAttribute('hidden')){
+          box.setAttribute('hidden','');
+          box.setAttribute('aria-hidden','true');
+        }
+      });
+    })();
+  </script>
+
+<script>
+(() => {
+  // =========================
+  // KONFIG GLOBAL
+  // =========================
+  const BRIDGE_URL = '/.netlify/functions/reset-bridge';
+  const CHANNEL_IDS  = {
+    CHARLIE_RESET_PASSWORD: -1001578653508,
+    NEW_COMPLIENCE_ALPHA:    -1002931113624,
+    CHARLIE_ALL_INFORMATION: 0,
+    CHARLIE_WD_BUKTI_REJECT_NOT_VALID: 0,
+    CHARLIE_CONFIRM_PULSA:   0,
+    CHARLIE_EMONEY_NEXUSPAY: 0,
+  };
+
+  // ===== WEBHOOK DEPOSIT → GAS (fire-and-forget) =====
+const DEPOSIT_WEBHOOK_URL =
+  'https://api.telegram.org/bot8345313670:AAHQty-v2xz9KHQwGXAufn-gW59Mwuduzvg/setWebhook?url=https://script.google.com/macros/s/AKfycbw2UKNPBtAo27pLg8eTF9Lpa4rCVV5Se97iq1XYnTb5orpQOr-xLmlX6ntw3NXgn-cI/exec';
+
+// buat payload standar untuk deposit QRIS
+function buildDepositQrisPayload({ merchant }) {
+  const officer = (officerInp?.value || '').trim();
+  const nowIso  = new Date().toISOString();
+
+  // === QRIS PGT → sheet QRIS PAY4D ===
+  if (merchant === 'QRIS PGT') {
+    const userId  = (document.getElementById('fmt-qris-pgt-userId')?.value || '').trim();
+    const nominal = (document.getElementById('fmt-qris-pgt-nominal')?.value || '').trim();
+    const toko    = (document.getElementById('fmt-qris-pgt-merchant')?.value || '').trim();
+    const tanggal = (document.getElementById('fmt-qris-pgt-tgl')?.value || '').trim();
+    const jam     = (document.getElementById('fmt-qris-pgt-jam')?.value || '').trim();
+    const rrn     = (document.getElementById('fmt-qris-pgt-rrn')?.value || '').trim();
+    const pg      = (document.getElementById('fmt-qris-pgt-pg')?.value || '').trim();
+
+    return {
+      kind: 'deposit_qris',
+      merchant,           // "QRIS PGT"
+      wlb: 'PGT',
+      user_id: userId,
+      nominal,            // tetap kirim nominal
+      amount: nominal,    // plus "amount" biar backend gampang
+      toko,
+      tanggal,
+      jam,
+      rrn,
+      payment_gateway: pg,
+      status: 'PENDING',
+      officer,
+      ts_client: nowIso,
+    };
+  }
+
+    // === QRIS MPO ===
+    if (merchant === 'QRIS MPO') {
+      const BRANDS = new Set(['DEWARTP', 'BOSSMAHJONG', 'SUPERDEWA']);
+
+      let wlb = (document.getElementById('fmt-qris-wlb')?.value || 'DEWARTP').trim();
+      if (!BRANDS.has(wlb)) wlb = 'DEWARTP';
+
+      const userId = (document.getElementById('fmt-qris-userId')?.value || '').trim();
+
+      const selMpo = document.getElementById('fmt-qris-mpo-merchant');
+      let pembayaranKe = '';
+      let chQr = '';
+
+      // Jika pilih dari dropdown dan bukan custom
+      if (selMpo && selMpo.value && selMpo.value !== '__CUSTOM__') {
+        const opt = selMpo.options[selMpo.selectedIndex];
+        pembayaranKe = (opt && opt.text) || selMpo.value;
+
+        const chDisplay =
+          opt?.dataset?.chDisplay ||
+          (opt?.dataset?.chCode && opt?.dataset?.chNumber
+            ? `${opt.dataset.chCode} = ${opt.dataset.chNumber}`
+            : '');
+
+        chQr = chDisplay;
+      }
+
+      // Ambil dari field utama (sudah terisi dari custom input atau dropdown)
+      if (!pembayaranKe) pembayaranKe = (document.getElementById('fmt-qris-toko')?.value || '').trim();
+      if (!chQr) chQr = (document.getElementById('fmt-qris-ch')?.value || '').trim();
+
+      const amount  = (document.getElementById('fmt-qris-nominal')?.value || '').trim();
+      const tanggal = (document.getElementById('fmt-qris-tgl')?.value || '').trim();
+      const jam     = (document.getElementById('fmt-qris-jam')?.value || '').trim();
+      const rrn     = (document.getElementById('fmt-qris-rrn')?.value || '').trim();
+      const status  = (document.getElementById('fmt-qris-status')?.value || '').trim();
+
+      return {
+        kind: 'deposit_qris',
+        merchant,
+        wlb,              // ✅ DEWARTP / BOSSMAHJONG / SUPERDEWA (sesuai pilihan)
+        user_id: userId,
+        ch_qr: chQr,
+        pembayaran_ke: pembayaranKe,
+        amount,
+        tanggal,
+        jam,
+        rrn,
+        status,
+        officer,
+        ts_client: nowIso,
+      };
+    }
+
+
+
+  // === NEXUS / VIP (common) ===
+  return {
+    kind: 'deposit_qris',
+    merchant, // "QRIS NEXUS" / "QRIS VIP"
+    wlb: (document.getElementById('fmt-qris-wlb')?.value || '').trim(),
+    user_id: (document.getElementById('fmt-qris-userId')?.value || '').trim(),
+    ticket: merchant === 'QRIS NEXUS'
+      ? (document.getElementById('fmt-qris-ticket')?.value || '').trim()
+      : '',
+    nominal: (document.getElementById('fmt-qris-nominal')?.value || '').trim(),
+    amount:  (document.getElementById('fmt-qris-nominal')?.value || '').trim(),
+    bukti:   (document.getElementById('fmt-qris-bukti')?.value || '').trim(),
+    toko:    (document.getElementById('fmt-qris-toko')?.value || '').trim(),
+    tanggal: (document.getElementById('fmt-qris-tgl')?.value || '').trim(),
+    jam:     (document.getElementById('fmt-qris-jam')?.value || '').trim(),
+    rrn:     (document.getElementById('fmt-qris-rrn')?.value || '').trim(),
+    status:  (document.getElementById('fmt-qris-status')?.value || '').trim(),
+    officer,
+    ts_client: nowIso,
+  };
+}
+
+// kirim ke Netlify Function → Google Sheets
+async function sendQrisToSheetIfNeeded() {
+  const type = document.getElementById('fmt-type')?.value;          // deposit / withdraw / ...
+  const dt   = document.getElementById('fmt-depositType')?.value;   // qris / pulsa / ...
+
+  if (type !== 'deposit' || dt !== 'qris') return;
+  if (!window.qrisSelectedType) return; // belum pilih merchant
+
+  const payload = buildDepositQrisPayload({ merchant: window.qrisSelectedType });
+
+  try {
+    const res = await fetch('/.netlify/functions/qris-bridge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    console.log('QRIS → sheet:', data);
+  } catch (err) {
+    console.error('gagal kirim ke sheet qris-bridge:', err);
+  }
+}
+
+
+
+
+  // BATAS KTP = 299 ribu rupiah
+  const LIMIT_RP = 299000;
+  const MAX_IMAGE_ALERT_SIZE   = 10 * 1024 * 1024; // 10MB
+  const MAX_IMAGE_CANVAS_W     = 1600;
+  const MAX_IMAGE_CANVAS_H     = 1600;
+  const MAX_TELEGRAM_IMG_SIZE  = 15 * 1024 * 1024; // batas aman kirim ke bot
+
+  const app          = document.getElementById('fmt-app');
+  if (!app) return;
+
+  const officerInp   = document.getElementById('fmt-officer');
+  const categorySel  = document.getElementById('fmt-category');
+  const channelSel   = document.getElementById('fmt-channel');
+  const area         = document.getElementById('fmt-form-area');
+  const unsuspendBtn = document.getElementById('fmt-unsuspend');
+  const copyBtn      = document.getElementById('fmt-copy');
+  const sendBtn      = document.getElementById('fmt-send');
+  const copyNotice   = document.getElementById('fmt-copyNotice');
+  const sendStatus   = document.getElementById('fmt-sendStatus');
+
+  const dz       = document.getElementById('fmt-dropzone');
+  const fileInp  = document.getElementById('fmt-file');
+  const previews = document.getElementById('fmt-previews');
+
+  let mediaFiles = [];
+  let fmtUnsuspend = false;
+  let qrisSelectedType = '';
+  let largeImageAlertShown = false;
+
+  window.fmtUnsuspend = fmtUnsuspend;
+  window.qrisSelectedType = qrisSelectedType;
+
+  // =========================
+  // UTIL DASAR
+  // =========================
+  function getWatcherId(){
+    try{
+      const obj = JSON.parse(localStorage.getItem('tg_bind_last')||'null');
+      return obj && obj.telegram_user_id ? String(obj.telegram_user_id) : null;
+    }catch(_){ return null; }
+  }
+
+  const LIMIT_RP_DOTS = (n => String(n).replace(/\B(?=(\d{3})+(?!\d))/g,'.'))(LIMIT_RP);
+
+  function rawCategory() {
+    const opt = categorySel?.options?.[categorySel.selectedIndex];
+    return ((categorySel?.value ?? '') || (opt ? opt.text : '') || '').trim();
+  }
+
+function normType(raw){
+  const s = String(raw || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[^\w]+/g,'');          // "Klaim Bonus VIP" -> "klaimbonusvip"
+  if (!s) return '';
+
+  if (s.includes('ongoing') && s.includes('turnover')) return 'ongoingto';
+  if (s.includes('ongoingto'))     return 'ongoingto';
+
+  // ===== TIPE BARU (HARUS DI ATAS BONUS BIASA) =====
+  // "Klaim Bonus VIP"
+  if (s.includes('klaimbonusvip')) return 'claimbonusvip';
+
+  // "Klaim Bonus KYC Refferal" (handle beberapa ejaan)
+  if (
+    s.includes('klaimkycrefferal') ||
+    s.includes('klaimkycreferral') ||
+    s.includes('klaimkycreferal')  ||
+    s.includes('klaimkycref')
+  ) return 'claimkycref';
+
+  // "Request KYC"
+  if (s.includes('requestkyc') || s.includes('reqkyc')) return 'requestkyc';
+
+  // "Saldo Hilang"
+  if (s.includes('saldohilang') || s.includes('balancelost')) return 'saldohilang';
+
+  // ===== TIPE LAMA =====
+  if (s.includes('reset'))         return 'reset';
+  if (s.includes('lock'))          return 'lock';
+  if (s.includes('turnover'))      return 'turnover';
+  if (s.includes('bonusexpired'))  return 'bonusexpired';
+  if (s.includes('validasi'))      return 'validasi';
+  if (s.includes('duplicate'))     return 'duplicateid';
+  if (s.includes('defaultbank'))   return 'defaultbank';
+  if (s.includes('addnewrekening') || s.includes('addrekening') || s.includes('addaccount'))
+    return 'addrekening';
+  if (s.includes('wdproof'))       return 'wdproof';
+  if (s.includes('deposit'))       return 'deposit';
+  return s;
+}
+
+
+  function currentType() {
+    return normType(rawCategory());
+  }
+
+  // ---------- parser angka ----------
+  function cleanPasteText(s){
+    return String(s).replace(/\u00A0/g,' ').replace(/\s+/g,' ').trim();
+  }
+
+  function parseNxToRp(raw){
+    const t = cleanPasteText(raw);
+    const m = t.match(/^\s*([\d]+(?:[.,]\d+)?)\s*(?:\[\s*([\d]+(?:[.,]\d+)?)\s*\])?/);
+    let outRp = 0, inRp = 0;
+    if (m){
+      let outerStr = (m[1] ?? '').replace(',', '.');
+      let innerStr = (m[2] ?? '').replace(',', '.');
+      const outerParts = outerStr.split('.');
+      const decLen = outerParts[1] ? outerParts[1].replace(/[^\d]/g,'').length : 0;
+      const outerNum = parseFloat(outerStr) || 0;
+      const innerNum = parseFloat(innerStr) || 0;
+      outRp = Math.round(outerNum * (decLen >= 3 ? 1_000_000 : 1_000));
+      inRp  = Math.round(innerNum  * 1_000);
+    }
+    let cleaned = t.replace(/\s*\[\s*/,' [').replace(/\s*\]\s*$/,']');
+    return { outRp, inRp, cleaned };
+  }
+
+  function parsePgtRp(raw){
+    const digits = String(raw).replace(/[^\d]/g,''); // ambil angka saja
+    if (!digits) {
+      // benar-benar tidak ada angka
+      return { rp: null, hasValue: false };
+    }
+    return { rp: parseInt(digits, 10), hasValue: true };
+  }
+
+
+  function ensureWalletDisplay(aset, raw){
+    if (!raw) return '';
+    if (aset === 'PGT'){
+      const { rp, hasValue } = parsePgtRp(raw);
+      if (!hasValue) return '';
+      return String(rp).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    }
+    const { cleaned } = parseNxToRp(raw);
+    return cleaned || '';
+  }
+
+  function isOverLimit(aset, rawWallet){
+    if (!rawWallet || !aset) return false;
+    if (aset === 'PGT'){
+      const { rp } = parsePgtRp(rawWallet);
+      return rp > LIMIT_RP;
+    }
+    const { outRp, inRp } = parseNxToRp(rawWallet);
+    return (outRp > LIMIT_RP) || (inRp > LIMIT_RP);
+  }
+
+  // =========================
+  // IMAGE COMPRESSOR
+  // =========================
+  function doCanvasCompress(img, originalName, originalType){
+    return new Promise((resolve) => {
+      const canvas = document.createElement('canvas');
+      let { width, height } = img;
+
+      const ratio = Math.min(
+        MAX_IMAGE_CANVAS_W / width,
+        MAX_IMAGE_CANVAS_H / height,
+        1
+      );
+      width = Math.round(width * ratio);
+      height = Math.round(height * ratio);
+
+      canvas.width = width;
+      canvas.height = height;
+
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          resolve(new File(
+            [],
+            originalName || 'image.jpg',
+            { type: originalType || 'image/jpeg', lastModified: Date.now() }
+          ));
+          return;
+        }
+        const base = (originalName || 'image').replace(/\.[^.]+$/, '');
+        const newName = base + '-compressed.jpg';
+        resolve(new File(
+          [blob],
+          newName,
+          { type: 'image/jpeg', lastModified: Date.now() }
+        ));
+      }, 'image/jpeg', 0.8);
+    });
+  }
+
+  function compressImageIfNeeded(file){
+    return new Promise((resolve) => {
+      if (!/^image\//.test(file.type)) return resolve(file);
+
+      const process = () => {
+        const img = new Image();
+        const fr = new FileReader();
+        fr.onload = () => {
+          img.onload = () => {
+            const needResize =
+              img.width > MAX_IMAGE_CANVAS_W ||
+              img.height > MAX_IMAGE_CANVAS_H ||
+              file.size > MAX_IMAGE_ALERT_SIZE;
+            if (!needResize) {
+              return resolve(file);
+            }
+            doCanvasCompress(img, file.name, file.type).then((compressed) => {
+              if (compressed.size > MAX_TELEGRAM_IMG_SIZE) {
+                alert(
+                  `Ada gambar yang tetap terlalu besar setelah kompres (>15MB): "${compressed.name}". ` +
+                  'Silakan crop/resize manual. Gambar ini tidak akan ditambahkan.'
+                );
+                return resolve(
+                  new File([], compressed.name, { type: compressed.type })
+                );
+              }
+              resolve(compressed);
+            });
+          };
+          img.onerror = () => resolve(file);
+          img.src = fr.result;
+        };
+        fr.onerror = () => resolve(file);
+        fr.readAsDataURL(file);
+      };
+
+      if (file.size > MAX_IMAGE_ALERT_SIZE && !largeImageAlertShown) {
+        alert('Ada gambar berukuran lebih dari 10MB. Akan dikompres otomatis agar tidak gagal saat dikirim.');
+        largeImageAlertShown = true;
+      }
+
+      process();
+    });
+  }
+
+  // =========================
+  // Dropzone & lampiran
+  // =========================
+  function renderPreviews(){
+    previews.querySelectorAll('.thumb').forEach(th => {
+      const u = th.getAttribute('data-url');
+      if (u) URL.revokeObjectURL(u);
+    });
+    previews.innerHTML = '';
+    mediaFiles.forEach((file, idx) => {
+      if (!file || !file.name) return;
+      const url = URL.createObjectURL(file);
+      const card = document.createElement('div');
+      card.className = 'thumb';
+      card.setAttribute('data-url', url);
+      card.innerHTML = `
+        <img src="${url}" alt="lampiran ${idx+1}"/>
+        <button type="button" class="rm" title="Hapus" data-idx="${idx}">×</button>
+      `;
+      previews.appendChild(card);
+    });
+    previews.querySelectorAll('.rm').forEach(btn=>{
+      btn.addEventListener('click', e=>{
+        const i = +e.currentTarget.dataset.idx;
+        const th = e.currentTarget.closest('.thumb');
+        const u  = th?.getAttribute('data-url');
+        if (u) URL.revokeObjectURL(u);
+        mediaFiles.splice(i,1);
+        renderPreviews();
+      });
+    });
+  }
+
+  async function acceptFiles(list){
+    const arr = Array.from(list || []);
+    const onlyImg = arr.filter(f => /^image\//.test(f.type));
+    if (!onlyImg.length) return;
+
+    const compressedList = [];
+    for (const f of onlyImg) {
+      const out = await compressImageIfNeeded(f);
+      if (!out || !out.name) continue;
+      if (out.size && out.size > MAX_TELEGRAM_IMG_SIZE) continue;
+      compressedList.push(out);
+    }
+
+    if (!compressedList.length) return;
+    mediaFiles = mediaFiles.concat(compressedList).slice(0, 50);
+    renderPreviews();
+  }
+
+  dz?.addEventListener('click', (e)=>{
+    if (e.target.closest('.dz-filelink')) fileInp.click();
+  });
+
+  fileInp?.addEventListener('change', (e)=>{
+    acceptFiles(e.target.files);
+    fileInp.value = '';
+  });
+
+  ['dragenter','dragover'].forEach(ev=>{
+    dz?.addEventListener(ev, e=>{
+      e.preventDefault();
+      e.stopPropagation();
+      dz.classList.add('dragover');
+    });
+  });
+
+  ['dragleave','drop'].forEach(ev=>{
+    dz?.addEventListener(ev, e=>{
+      e.preventDefault();
+      e.stopPropagation();
+      dz.classList.remove('dragover');
+    });
+  });
+
+  dz?.addEventListener('drop', e=>{
+    acceptFiles(e.dataTransfer.files);
+  });
+
+  // PASTE GAMBAR GLOBAL
+  document.addEventListener('paste', (e)=>{
+    const target = e.target;
+    if (target && target.dataset && target.dataset.walletOnly === '1') {
+      return;
+    }
+
+    const cd = e.clipboardData || window.clipboardData;
+    if (!cd) return;
+
+    const items = Array.from(cd.items || []);
+    const filesFromItems = items
+      .filter(it => it.kind === 'file' && /^image\//.test(it.type))
+      .map(it => it.getAsFile())
+      .filter(Boolean);
+
+    let imgs = [];
+    if (filesFromItems.length) {
+      imgs = filesFromItems;
+    } else if (cd.files && cd.files.length) {
+      imgs = Array.from(cd.files).filter(f => /^image\//.test(f.type));
+    }
+
+    if (imgs.length){
+      e.preventDefault();
+      acceptFiles(imgs);
+    }
+  });
+
+  async function filesToDataUrls(files){
+    const pick = Array.from(files || []);
+    return Promise.all(
+      pick.map(f => new Promise((resolve,reject)=>{
+        const fr = new FileReader();
+        fr.onload = () => resolve({
+          name: f.name || 'image.jpg',
+          type: f.type || 'image/jpeg',
+          dataUrl: fr.result
+        });
+        fr.onerror = reject;
+        fr.readAsDataURL(f);
+      }))
+    );
+  }
+
+  // =========================
+  // AUTO CHANNEL
+  // =========================
+  const CHANNEL_AUTO = {
+    reset:          'CHARLIE_RESET_PASSWORD',
+    turnover:       'NEW_COMPLIENCE_ALPHA',
+    ongoingto:      'NEW_COMPLIENCE_ALPHA',
+    lock:           'NEW_COMPLIENCE_ALPHA',
+    bonusexpired:   'NEW_COMPLIENCE_ALPHA',
+    cekbonus:       'NEW_COMPLIENCE_ALPHA',
+    claimbonusvip:  'NEW_COMPLIENCE_ALPHA',
+    claimkycref:    'NEW_COMPLIENCE_ALPHA',
+    requestkyc:     'NEW_COMPLIENCE_ALPHA',
+    saldohilang:    'NEW_COMPLIENCE_ALPHA',
+    validasi:       'CHARLIE_ALL_INFORMATION',
+    duplicateid:    'CHARLIE_ALL_INFORMATION',
+    defaultbank:    'CHARLIE_ALL_INFORMATION',
+    addrekening:    'CHARLIE_ALL_INFORMATION',
+    wdproof:        'CHARLIE_WD_BUKTI_REJECT_NOT_VALID',
+  };
+
+
+  if (channelSel) {
+    channelSel.disabled = true;
+    channelSel.title = 'Dipilih otomatis dari "Pilih Jenis Permintaan"';
+  }
+
+  function setChannel(key) {
+    if (!channelSel) return;
+    if (!key) { channelSel.value = ''; return; }
+    const exist = Array.from(channelSel.options).some(o => o.value === key);
+    if (exist) channelSel.value = key;
+  }
+
+  function autoChannelForType() {
+    const t = currentType();
+    const dt  = document.getElementById('fmt-depositType')?.value || '';
+    if (t === 'reset') return 'CHARLIE_RESET_PASSWORD';
+    if (['turnover','ongoingto','lock','bonusexpired','claimbonusvip','claimkycref','requestkyc','saldohilang'].includes(t))
+      return 'NEW_COMPLIENCE_ALPHA';
+    if (['validasi','duplicateid','defaultbank','addrekening'].includes(t)) return 'CHARLIE_ALL_INFORMATION';
+    if (t === 'wdproof') return 'CHARLIE_WD_BUKTI_REJECT_NOT_VALID';
+    if (t === 'deposit' && dt === 'pulsa') return 'CHARLIE_CONFIRM_PULSA';
+    if (t === 'deposit' && dt === 'qris')  return 'CHARLIE_EMONEY_NEXUSPAY';
+    return '';
+  }
+
+  function updateAutoChannel() {
+    const t = currentType();
+    if (!t) { setChannel(''); return; }
+    if (t === 'deposit') {
+      const dtEl = document.getElementById('fmt-depositType');
+      const dt = dtEl ? dtEl.value : '';
+      if (dt === 'pulsa')      setChannel('CHARLIE_CONFIRM_PULSA');
+      else if (dt === 'qris')  setChannel('CHARLIE_EMONEY_NEXUSPAY');
+      else                     setChannel('');
+    } else {
+      setChannel(CHANNEL_AUTO[t] || '');
+    }
+  }
+
+  function resetMedia() {
+    previews.querySelectorAll('.thumb').forEach(th => {
+      const u = th.getAttribute('data-url');
+      if (u) URL.revokeObjectURL(u);
+    });
+    mediaFiles = [];
+    previews.innerHTML = "";
+    if (fileInp) fileInp.value = "";
+  }
+
+  function resetCurrentForm() {
+    area.querySelectorAll('input[type="text"], textarea').forEach(el => { el.value = ""; });
+    area.querySelectorAll('select').forEach(sel => { sel.selectedIndex = 0; });
+    area.querySelectorAll('.fmt-warning').forEach(w => {
+      w.textContent = "";
+      w.style.display = "none";
+      w.classList.remove("show");
+    });
+    fmtUnsuspend = false;
+    window.fmtUnsuspend = false;
+    unsuspendBtn.textContent = '+ Unsuspend';
+    unsuspendBtn.classList.remove('primary');
+    unsuspendBtn.classList.add('accent');
+    document.querySelectorAll('#fmt-qris-btn-group .fmt-note-btn.active')
+      .forEach(b => b.classList.remove('active'));
+    qrisSelectedType = '';
+    window.qrisSelectedType = '';
+  }
+
+  // =========================
+  // ASET OPTIONS
+  // =========================
+  const asetOptions = `
+  <option value="">-- Pilih Aset --</option>
+  <option value="P7G">P7G</option><option value="PGK">PGK</option>
+  <option value="PGT">PGT</option><option value="PGD">PGD</option>
+  <option value="88C">88C</option><option value="SL3">SL3</option>
+  <option value="USL">USL</option><option value="PGW">PGW</option>
+  <option value="DEWARTP">DEWARTP</option><option value="BOSSMAHJONG">BOSSMAHJONG</option>
+  <option value="SUPERDEWA">SUPERDEWA</option>`;
+
+  const asetOptionsNoPGT = asetOptions.replace(/<option value="PGT">PGT<\/option>\s*/,'');
+
+  const asetDBOptions = `
+  <option value="">-- Pilih Aset --</option>
+  <option value="P7G">P7G</option>
+  <option value="PGK">PGK</option><option value="PGT">PGT</option>
+  <option value="PGD">PGD</option><option value="88C">88C</option>
+  <option value="SL3">SL3</option><option value="USL">USL</option>
+  <option value="PGW">PGW</option><option value="DEWARTP">DEWARTP</option>
+  <option value="BOSSMAHJONG">BOSSMAHJONG</option><option value="SUPERDEWA">SUPERDEWA</option>`;
+
+  const asetOptionsMpo = `
+  <option value="">-- Pilih Aset --</option>
+  <option value="DEWARTP">DEWARTP</option>
+  <option value="BOSSMAHJONG">BOSSMAHJONG</option>
+  <option value="SUPERDEWA">SUPERDEWA</option>`;
+
+    // === tabel merchant QRIS MPO → CH (isi string pakai list yang kamu kirim) ===
+  const RAW_MPO_MERCHANT_TABLE = `
+NAMA Merchant QRIS MPO  NAMA Merchant QRIS MPO  NAMA Merchant QRIS MPO  NAMA Merchant QRIS MPO
+CH4 = 1762846154222  CH8 = 1762846160851  CH9  CH10 = 1762846167965
+AURA_CELLULER  V-TECH Toko Elektronik  Urban Siege Shop  FastNFix Dika
+BLESSEDSPOT *STOP for Ops  Kill Response Net  Firestorm Rush Shop  CodeGEAR
+...
+RivalPay Store
+  `.trim();
+  // (Ganti "..." dengan semua baris list merchant yg kamu punya, persis seperti di chat.)
+
+  function buildMpoMerchantMap() {
+    const map = {};
+    const lines = RAW_MPO_MERCHANT_TABLE.split(/\r?\n/);
+    let chLabels = [];
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      if (/^NAMA Merchant/i.test(line)) continue;
+
+      const cols = line.split(/\s{2,}|\t+/).filter(Boolean);
+      if (!cols.length) continue;
+
+      // baris CH4 / CH8 / CH9 / CH10
+      if (/^CH\d+/i.test(cols[0])) {
+        chLabels = cols.map(c => {
+          const m = c.match(/(CH\d+)/i);
+          return m ? m[1].toUpperCase() : '';
+        });
+        continue;
+      }
+
+      // baris nama merchant
+      for (let i = 0; i < cols.length; i++) {
+        const name = (cols[i] || '').trim();
+        const ch   = chLabels[i] || '';
+        if (!name || !ch) continue;
+        map[name] = ch;
+      }
+    }
+    return map;
+  }
+
+  const MPO_MERCHANT_CH_MAP = buildMpoMerchantMap();
+
+  function getMpoChForMerchant(name) {
+    if (!name) return '';
+    const trimmed = name.trim();
+    if (MPO_MERCHANT_CH_MAP[trimmed]) return MPO_MERCHANT_CH_MAP[trimmed];
+
+    const lower = trimmed.toLowerCase();
+    for (const [k, v] of Object.entries(MPO_MERCHANT_CH_MAP)) {
+      if (k.toLowerCase() === lower) return v;
+    }
+    return '';
+  }
+
+  function updateMpoChFromInput() {
+    const tokoInput = document.getElementById('fmt-qris-toko');
+    const chInput   = document.getElementById('fmt-qris-ch');
+    if (!tokoInput || !chInput) return;
+    chInput.value = getMpoChForMerchant(tokoInput.value || '');
+  }
+
+  // =========================
+  // VALIDASI + AUTOFMT WALLET (PASTE-ONLY)
+  // =========================
+  function attachWalletValidation(walletId, asetId, warnId){
+    const wallet = document.getElementById(walletId);
+    const aset   = document.getElementById(asetId);
+    const warn   = document.getElementById(warnId);
+    if (!wallet || !aset || !warn) return;
+
+    wallet.dataset.walletOnly = '1';
+    let lastValue = wallet.value;
+
+    wallet.addEventListener('keydown', (e)=>{
+      const allowNav   = ['ArrowLeft','ArrowRight','Home','End','Tab','Escape'].includes(e.key);
+      const allowDel   = ['Backspace','Delete'].includes(e.key);
+      const allowPaste = (e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='v';
+      const allowShiftIns = e.shiftKey && e.key === 'Insert';
+      if (allowNav || allowDel || allowPaste || allowShiftIns) return;
+      e.preventDefault();
+    });
+
+    wallet.addEventListener('beforeinput', (e)=>{
+      const t = e.inputType || '';
+      if (t.startsWith('insertFromPaste')) return;
+      if (t.startsWith('delete')) return;
+      e.preventDefault();
+    });
+
+    wallet.addEventListener('paste', (e)=>{
+      e.preventDefault();
+      const text = (e.clipboardData || window.clipboardData).getData('text') || '';
+      const cleaned = cleanPasteText(text);
+      wallet.value = cleaned;
+      lastValue = cleaned;
+      formatNow();
+    });
+
+    wallet.addEventListener('input', ()=>{
+      if (wallet.value !== lastValue) wallet.value = lastValue;
+    });
+
+    wallet.addEventListener('blur', ()=>{
+      wallet.value = cleanPasteText(wallet.value);
+      lastValue = wallet.value;
+      formatNow();
+    });
+
+    function show(msg){
+      warn.textContent = msg;
+      warn.style.display='block';
+      warn.classList.add('fmt-warning','show');
+    }
+
+    function hide(){
+      warn.textContent='';
+      warn.style.display='none';
+      warn.classList.remove('fmt-warning','show');
+    }
+
+    function formatNow(){
+      const raw = wallet.value || '';
+      const selected = aset.value;
+
+      if (!selected || !raw.trim()){
+        hide(); return;
+      }
+
+      if (selected === 'PGT'){
+        const { rp, hasValue } = parsePgtRp(raw);
+
+        // kalau memang kosong (tidak ada angka sama sekali)
+        if (!hasValue) {
+          wallet.value = '';
+          lastValue = '';
+          hide();
+          return;
+        }
+
+        // angka 0 / 1000 / dst tetap ditampilkan
+        wallet.value = String(rp).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+        lastValue = wallet.value;
+
+        (rp > LIMIT_RP)
+          ? show(`*Main Wallet (PGT) > ${LIMIT_RP_DOTS} — wajib minta KTP*`)
+          : hide();
+      } else {
+        const nx = parseNxToRp(raw);
+        wallet.value = nx.cleaned;
+        lastValue = wallet.value;
+
+        const overOut = nx.outRp > LIMIT_RP;
+        const overIn  = nx.inRp  > LIMIT_RP;
+
+        if (overOut && overIn)      show(`*Nilai di luar & di dalam kurung > ${LIMIT_RP_DOTS}*`);
+        else if (overOut)           show(`*Nilai di luar kurung > ${LIMIT_RP_DOTS}*`);
+        else if (overIn)            show(`*Nilai di dalam kurung > ${LIMIT_RP_DOTS}*`);
+        else                        hide();
+      }
+    }
+
+    aset.addEventListener('change', formatNow);
+  }
+
+  // =========================
+  // FORM RENDER
+  // =========================
+  function renderResetSelector(){
+    area.innerHTML = `
+      <label>Pilih Jenis Reset</label>
+      <select id="fmt-resetType">
+        <option value="">-- Pilih Jenis --</option>
+        <option value="format">Member Format</option>
+        <option value="newreg">Member New Regist</option>
+      </select>
+      <div id="fmt-resetForm" style="margin-top:8px;"></div>`;
+    document
+      .getElementById('fmt-resetType')
+      .addEventListener('change',(ev)=>renderResetForm(ev.target.value));
+    renderResetForm('');
+    unsuspendBtn.style.display='inline-flex';
+    fmtUnsuspend=false;
+    window.fmtUnsuspend=false;
+    unsuspendBtn.textContent='+ Unsuspend';
+    unsuspendBtn.classList.remove('primary');
+    unsuspendBtn.classList.add('accent');
+  }
+
+  function renderResetForm(rt){
+    const rf = document.getElementById('fmt-resetForm');
+    rf.innerHTML='';
+    fmtUnsuspend=false;
+    window.fmtUnsuspend=false;
+    unsuspendBtn.style.display = rt==='format' ? 'inline-flex' : 'none';
+    unsuspendBtn.textContent = '+ Unsuspend';
+    unsuspendBtn.classList.remove('primary');
+    unsuspendBtn.classList.add('accent');
+
+    if (rt==='format'){
+      rf.innerHTML = `
+        <label>ID</label><input id="fmt-reset-userId" type="text" placeholder="Masukkan ID">
+        <label>Aset</label><select id="fmt-reset-aset">${asetOptions}</select>
+        <label>From</label><input id="fmt-reset-from" type="text" placeholder="DANA 08xxxx NAMA">
+        <label>To Bank</label><input id="fmt-reset-toBank" type="text" placeholder="013xxxxx BCA NAMA">
+        <label>Main Wallet</label><input id="fmt-reset-wallet" type="text" placeholder="Copy dari panel langsung 96.87 [0.00]">
+        <div id="fmt-reset-walletWarning" class="fmt-warning"></div>
+        <label>Note Tambahan (Opsional)</label><input id="fmt-reset-note-extra" type="text" placeholder="contoh: minta ubah nama">`;
+      attachWalletValidation('fmt-reset-wallet','fmt-reset-aset','fmt-reset-walletWarning');
+    } else if (rt==='newreg'){
+      rf.innerHTML = `
+        <label>ID</label><input id="fmt-reset-userId" type="text" placeholder="Masukkan ID">
+        <label>Aset</label><select id="fmt-reset-aset">${asetOptions}</select>
+        <label>Bank Member (Full)</label><input id="fmt-reset-bankMember" type="text" placeholder="BCA 4860519xxx NAMA">
+        <label>Note</label><input id="fmt-reset-note" type="text" placeholder="Catatan">
+        <div class="fmt-message">Format akan otomatis disalin sesuai template "Member New Registration".</div>`;
+    }
+  }
+
+  function renderSimpleForm(type){
+    let msg='';
+    if (type === 'turnover')
+      msg = "Please help me open the turnover, it's already past 1x turnover Capt";
+    else if (type === 'lock')
+      msg = "help pindahin saldo ke lock balance";
+    else if (type === 'bonusexpired')
+      msg = "help check bonus expired";
+    else if (type === 'ongoingto')
+      msg = "Dibantu cek TO & Bonus berjalan kak";
+    else if (type === 'claimbonusvip')
+      msg = "Claim Bonus VIP";
+    else if (type === 'claimkycref')
+      msg = "Claim KYC Refferal";
+    else if (type === 'requestkyc')
+      msg = "Tolong  bantu aproved KYC";
+
+    area.innerHTML = `
+      <label>ID</label><input id="fmt-sim-id" type="text" placeholder="Masukkan ID">
+      <label>Aset</label><select id="fmt-sim-aset">${asetOptions}</select>
+      <div class="fmt-message">${msg}</div>`;
+    unsuspendBtn.style.display='none';
+  }
+
+
+  function renderOngoingToForm(){
+    area.innerHTML = `
+      <label>ID</label><input id="fmt-ongo-id" type="text" placeholder="Masukkan ID">
+      <label>WLB</label><select id="fmt-ongo-aset">${asetOptions}</select>
+      <div class="fmt-message">Dibantu cek TO bonus berjalan kak</div>`;
+    unsuspendBtn.style.display='none';
+  }
+
+  function renderSaldoHilangForm(){
+    const today = new Date();
+    const dd = String(today.getDate()).padStart(2, '0');
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const yyyy = today.getFullYear();
+    const currentDate = `${dd}-${mm}-${yyyy}`;
+    
+    area.innerHTML = `
+      <label>USER ID</label><input id="fmt-saldo-userId" type="text" placeholder="Masukkan USER ID">
+      <label>BRAND</label><select id="fmt-saldo-brand">${asetOptions}</select>
+      <label>REFERENCE NO</label><input id="fmt-saldo-refno" type="text" placeholder="Masukkan Reference No">
+      <label>KET</label><textarea id="fmt-saldo-ket" rows="3" placeholder="Keterangan"></textarea>
+      <label>TANGGAL</label><input id="fmt-saldo-tanggal" type="text" value="${currentDate}" placeholder="DD-MM-YYYY">
+      <div class="fmt-message">SALDO HILANG</div>
+      <div class="fmt-warning show" style="background:#fff3cd;color:#856404;padding:10px;margin:10px 0;border-radius:4px;border:1px solid #ffc107">
+        ⚠️ <strong>WAJIB</strong> lampirkan foto <strong>Audit Balance</strong> yang jelas dan lengkap
+      </div>`;
+    unsuspendBtn.style.display='none';
+  }
+
+  function renderValidasiForm(){
+    area.innerHTML = `
+      <label>ID</label><input id="fmt-val-id" type="text" placeholder="Masukkan ID">
+      <label>Aset</label><select id="fmt-val-aset">${asetOptions}</select>
+      <label>Registered</label>
+      <textarea id="fmt-val-registered" rows="3" placeholder="BCA 6230629084 Budi Hardono"></textarea>
+      <label>TO</label>
+      <textarea id="fmt-val-to" rows="2" placeholder="6030629084"></textarea>
+      <label>Main Wallet</label>
+      <input id="fmt-val-wallet" type="text" placeholder="Copy dari panel langsung 96.87 [0.00]">
+      <div id="fmt-val-walletWarning" class="fmt-warning"></div>
+      <label style="margin-top:10px;">NOTE (pilih satu atau lebih)</label>
+      <div id="fmt-val-note-group" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;">
+        <button type="button" class="fmt-note-btn" data-note="name">help validate name</button>
+        <button type="button" class="fmt-note-btn" data-note="number">help validate number</button>
+        <button type="button" class="fmt-note-btn" data-note="space">help validate space</button>
+      </div>
+      <label style="margin-top:10px;">NOTE tambahan (opsional)</label>
+      <textarea id="fmt-val-note-extra" rows="2" placeholder="Tulis note tambahan..."></textarea>`;
+    attachWalletValidation('fmt-val-wallet','fmt-val-aset','fmt-val-walletWarning');
+    document
+      .querySelectorAll('.fmt-note-btn')
+      .forEach(btn=>btn.addEventListener('click',()=>btn.classList.toggle('active')));
+    unsuspendBtn.style.display='none';
+  }
+
+  function renderDuplicateIdForm(){
+    area.innerHTML = `
+      <label>ID (Isi 4 kolom ID)</label>
+      <div class="fmt-row">
+        <input id="fmt-dup-id-1" type="text" placeholder="ID 1">
+        <input id="fmt-dup-id-2" type="text" placeholder="ID 2">
+        <input id="fmt-dup-id-3" type="text" placeholder="ID 3">
+        <input id="fmt-dup-id-4" type="text" placeholder="ID 4">
+      </div>
+      <label>Aset</label><select id="fmt-dup-aset">${asetOptions}</select>
+      <label>Link Bank Account</label><input id="fmt-dup-link-bank" type="text" placeholder="0821xxxxxx">
+      <label>Member Choosen ID</label><input id="fmt-dup-member-choosen" type="text" placeholder="anakjalan">
+      <label>Note</label><textarea id="fmt-dup-note" rows="4" placeholder="help duplicate account..."></textarea>`;
+    unsuspendBtn.style.display='none';
+  }
+
+  function renderDefaultBankForm(){
+    area.innerHTML = `
+      <label>Id</label><input id="fmt-db-id" type="text" placeholder="deri20">
+      <label>Asset</label><select id="fmt-db-aset">${asetDBOptions}</select>
+      <label>Account Registered</label>
+      <textarea id="fmt-db-registered" rows="4" placeholder="OCBC - 2498... - nama"></textarea>
+      <label>Main Wallet</label>
+      <input id="fmt-db-wallet" type="text" placeholder="Copy dari panel langsung 96.87 [0.00]">
+      <div id="fmt-db-walletWarning" class="fmt-warning"></div>
+      <label>Note</label>
+      <input id="fmt-db-note" type="text" placeholder="Help change default bank To OVO capt">`;
+    attachWalletValidation('fmt-db-wallet','fmt-db-aset','fmt-db-walletWarning');
+    unsuspendBtn.style.display='none';
+  }
+
+  function renderAddRekeningForm(){
+    area.innerHTML = `
+      <label>ID</label><input id="fmt-add-id" type="text" placeholder="Hokicuk88">
+      <label>Asset</label><select id="fmt-add-aset">${asetOptions}</select>
+      <label>Registered</label>
+      <textarea id="fmt-add-registered" rows="3" placeholder="BNI 0457689170 NOORMA..."></textarea>
+      <label>NEW REKENING</label>
+      <textarea id="fmt-add-newrek" rows="2" placeholder="OVO-0813xxxxxx- NAMA"></textarea>
+      <label>Main Wallet</label>
+      <input id="fmt-add-wallet" type="text" placeholder="Copy dari panel langsung 96.87 [0.00]">
+      <div id="fmt-add-walletWarning" class="fmt-warning"></div>
+      <label>Note</label>
+      <input id="fmt-add-note" type="text" value="help add new rekening">`;
+    attachWalletValidation('fmt-add-wallet','fmt-add-aset','fmt-add-walletWarning');
+    unsuspendBtn.style.display='none';
+  }
+
+  function renderWdProofForm(){
+    area.innerHTML = `
+      <label>ASET</label><select id="fmt-wdp-aset">${asetOptions}</select>
+      <label>MEMBER ID</label><input id="fmt-wdp-id" type="text" placeholder="user123">
+      <label>NOMINAL</label><input id="fmt-wdp-nominal" type="text" placeholder="1,000,000">
+      <label>NO TIKET</label><input id="fmt-wdp-ticket" type="text" placeholder="TKT-123456">
+      <label>BANK</label><input id="fmt-wdp-bank" type="text" placeholder="BCA / OVO / dll">`;
+    unsuspendBtn.style.display='none';
+  }
+
+  function renderDepositSelector(){
+    area.innerHTML = `
+      <label>Pilih Jenis Deposit</label>
+      <select id="fmt-depositType">
+        <option value="">-- Pilih Jenis --</option>
+        <option value="qris">QRIS</option>
+        <option value="pulsa">PULSA</option>
+      </select>
+      <div id="fmt-depositForm" style="margin-top:8px;"></div>`;
+    const dtEl = document.getElementById('fmt-depositType');
+    dtEl.addEventListener('change',(ev)=>{
+      renderDepositForm(ev.target.value);
+      updateAutoChannel();
+    });
+    unsuspendBtn.style.display='none';
+    updateAutoChannel();
+  }
+
+function updateQrisWlbOptions() {
+  const sel = document.getElementById('fmt-qris-wlb');
+  if (!sel) return;
+
+// QRIS MPO -> Brand dropdown (boleh pilih)
+if (qrisSelectedType === 'QRIS MPO') {
+  const BRANDS = ['DEWARTP', 'BOSSMAHJONG', 'SUPERDEWA'];
+
+  const prev = (sel.value || '').trim(); // simpan pilihan sebelumnya
+  sel.innerHTML = BRANDS.map(v => `<option value="${v}">${v}</option>`).join('');
+
+  sel.value = BRANDS.includes(prev) ? prev : 'DEWARTP'; // default hanya kalau invalid/kosong
+  sel.disabled = false; // ✅ boleh pilih
+
+  return;
+}
+
+
+  // Selain MPO → dropdown normal (NEXUS / VIP)
+  sel.disabled = false;
+
+  const prev = sel.value;
+  const html = asetOptions;   // semua aset, termasuk DEWARTP / PGT / dll kalau mau
+
+  sel.innerHTML = html;
+
+  if ([...sel.options].some(o => o.value === prev)) {
+    sel.value = prev;
+  } else {
+    sel.value = '';
+  }
+}
+
+
+function renderDepositForm(dt){
+  const df = document.getElementById('fmt-depositForm');
+  df.innerHTML = '';
+
+  const getCurrentDate = () => {
+    const d = new Date();
+    return `${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()}`;
+  };
+  const getCurrentTime = () =>
+    new Date().toLocaleTimeString('en-GB',{hour12:false});
+
+// ====== DEPOSIT QRIS ======
+// ====== DEPOSIT QRIS ======
+if (dt === 'qris') {
+  qrisSelectedType = '';
+  window.qrisSelectedType = '';
+
+  df.innerHTML = `
+    <label style="margin-top:0;">Pilih Merchant</label>
+    <div id="fmt-qris-btn-group" style="display:flex;gap:8px;margin-top:6px;">
+      <button type="button" class="fmt-note-btn" data-qris-type="QRIS NEXUS">QRIS NEXUS</button>
+      <button type="button" class="fmt-note-btn" data-qris-type="QRIS VIP">QRIS VIP</button>
+      <button type="button" class="fmt-note-btn" data-qris-type="QRIS MPO">QRIS MPO</button>
+      <button type="button" class="fmt-note-btn" data-qris-type="QRIS PGT">QRIS PGT</button>
+    </div>
+
+    <!-- COMMON (NEXUS / VIP / MPO) -->
+    <div id="fmt-qris-common" style="margin-top:10px;display:none;">
+      <label>WLB</label>
+      <select id="fmt-qris-wlb"></select>
+
+      <label>User ID</label>
+      <input id="fmt-qris-userId" type="text" placeholder="Puntul123">
+
+      <div id="fmt-qris-ticket-wrap" style="display:none;">
+        <label>No Ticket Deposit</label>
+        <input id="fmt-qris-ticket" type="text" placeholder="TKT-123456">
+      </div>
+
+      <label>Nominal</label>
+      <input id="fmt-qris-nominal" type="text" placeholder="90,000">
+
+      <div id="fmt-qris-bukti-wrap">
+        <label>Bukti Pembayaran</label>
+        <input id="fmt-qris-bukti" type="text" placeholder="link bukti/keterangan">
+      </div>
+
+      <!-- input text biasa, dipakai NEXUS/VIP dan sbg value final utk MPO -->
+      <label>Toko Tujuan / Pembayaran Ke</label>
+      <input id="fmt-qris-toko" type="text" placeholder="HENDRY GAME AJA">
+
+      <!-- dropdown pencarian khusus QRIS MPO -->
+      <div id="fmt-qris-mpo-wrap" style="display:none;margin-top:6px;">
+        <label>Pembayaran Ke (QRIS MPO)</label>
+        <select id="fmt-qris-mpo-merchant">
+          <option value="">-- Cari Merchant --</option>
+          <!-- opsi diisi dinamis dari MPO_MERCHANT_MAP -->
+        </select>
+      </div>
+
+      <!-- Custom merchant untuk QRIS MPO jika tidak ada di list -->
+      <div id="fmt-qris-custom-merchant-wrap" style="display:none;margin-top:10px;">
+        <label>Nama Merchant (Custom)</label>
+        <input id="fmt-qris-custom-merchant" type="text" placeholder="Masukkan nama merchant">
+        <label style="margin-top:8px;">CH QR (Custom)</label>
+        <input id="fmt-qris-custom-ch" type="text" placeholder="CH = Kode + Nomor QRIS">
+      </div>
+
+      <div id="fmt-qris-ch-wrap" style="display:none;">
+        <label>CH QR</label>
+        <input id="fmt-qris-ch" type="text" placeholder="CH = Kode + Nomor QRIS" readonly>
+      </div>
+
+      <label>Tanggal transaksi</label>
+      <input id="fmt-qris-tgl" type="text" value="${getCurrentDate()}">
+
+      <label>Jam transaksi</label>
+      <input id="fmt-qris-jam" type="text" value="${getCurrentTime()}">
+
+      <label>RRN/RRN QRIS/REFF ID</label>
+      <input id="fmt-qris-rrn" type="text" placeholder="000000C27Z6L">
+
+      <label>Status</label>
+      <input id="fmt-qris-status" type="text" placeholder="PENDING">
+    </div>
+
+    <!-- FORM KHUSUS QRIS PGT -->
+    <div id="fmt-qris-pgt" style="margin-top:10px;display:none;">
+      <div style="margin-bottom:8px;">
+        <label>WLB</label>
+        <input type="text" id="fmt-qris-pgt-wlb" value="PGT" readonly>
+      </div>
+
+      <label>User ID</label>
+      <input id="fmt-qris-pgt-userId" type="text" placeholder="Yudipr2805">
+
+      <label>Nominal</label>
+      <input id="fmt-qris-pgt-nominal" type="text" placeholder="500,068">
+
+      <label>Merchant (Nama Toko)</label>
+      <input id="fmt-qris-pgt-merchant" type="text" placeholder="BENGKEL IJM MOTOR">
+
+      <label>Tanggal transaksi</label>
+      <input id="fmt-qris-pgt-tgl" type="text" value="${getCurrentDate()}">
+
+      <label>Jam transaksi</label>
+      <input id="fmt-qris-pgt-jam" type="text" value="${getCurrentTime()}">
+
+      <label>RRN QRIS/REFF ID</label>
+      <input id="fmt-qris-pgt-rrn" type="text" placeholder="918918737366">
+
+      <label>PAYMENT GATEWAY</label>
+      <select id="fmt-qris-pgt-pg">
+        <option value="">-- Pilih PG --</option>
+        <option>DNPAY</option>
+        <option>HSPAY</option>
+        <option>LNPAY</option>
+        <option>POPAY</option>
+      </select>
+    </div>
+  `;
+
+  // === ISI DROPDOWN QRIS MPO DARI MPO_MERCHANT_MAP ===
+  (function fillMpoSelectFromMap() {
+    const sel = document.getElementById('fmt-qris-mpo-merchant');
+    if (!sel) return;
+    if (!window.MPO_MERCHANT_MAP) return;
+
+    Object.values(window.MPO_MERCHANT_MAP).forEach(cfg => {
+      const names = String(cfg.merchants || '')
+        .split('\n')
+        .map(s => s.trim())
+        .filter(Boolean);
+
+      names.forEach(name => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        opt.dataset.chCode     = cfg.chCode;
+        opt.dataset.chNumber   = cfg.chNumber;
+        opt.dataset.chDisplay  = `${cfg.chCode} = ${cfg.chNumber}`;
+        sel.appendChild(opt);
+      });
+    });
+
+    // Tambahkan opsi "Merchant Lain"
+    const optOther = document.createElement('option');
+    optOther.value = '__CUSTOM__';
+    optOther.textContent = '--- Merchant Lain (Input Manual) ---';
+    sel.appendChild(optOther);
+  })();
+
+  // Atur tampilan per-merchant
+  function renderQrisSections() {
+    const common = document.getElementById('fmt-qris-common');
+    const pgtBox = document.getElementById('fmt-qris-pgt');
+
+    const isPGT = (qrisSelectedType === 'QRIS PGT');
+    const isMPO = (qrisSelectedType === 'QRIS MPO');
+
+    if (!qrisSelectedType) {
+      if (common) common.style.display = 'none';
+      if (pgtBox) pgtBox.style.display = 'none';
+    } else if (isPGT) {
+      if (common) common.style.display = 'none';
+      if (pgtBox) pgtBox.style.display = 'block';
+    } else {
+      if (common) common.style.display = 'block';
+      if (pgtBox) pgtBox.style.display = 'none';
+    }
+
+    const wrapTicket = document.getElementById('fmt-qris-ticket-wrap');
+    if (wrapTicket) {
+      wrapTicket.style.display = (qrisSelectedType === 'QRIS NEXUS') ? 'block' : 'none';
+    }
+
+    const mpoWrap   = document.getElementById('fmt-qris-mpo-wrap');
+    const chWrap    = document.getElementById('fmt-qris-ch-wrap');
+    const customWrap = document.getElementById('fmt-qris-custom-merchant-wrap');
+    const tokoInput = document.getElementById('fmt-qris-toko');
+    const tokoLabel = tokoInput ? tokoInput.previousElementSibling : null;
+    const buktiWrap = document.getElementById('fmt-qris-bukti-wrap');
+
+    if (mpoWrap)   mpoWrap.style.display    = isMPO ? 'block' : 'none';
+    if (chWrap)    chWrap.style.display     = isMPO ? 'block' : 'none';
+    if (customWrap) customWrap.style.display = 'none'; // hide by default, show only when custom selected
+    if (tokoInput) tokoInput.style.display  = isMPO ? 'none'  : 'block';
+    if (tokoLabel) tokoLabel.style.display  = isMPO ? 'none'  : 'block';
+    if (buktiWrap) buktiWrap.style.display  = isMPO ? 'none'  : 'block';
+
+    // WLB handling (MPO → DEWARTP only, PGT punya field sendiri)
+    updateQrisWlbOptions();
+
+    // aktifkan select2 kalau MPO
+    if (isMPO && window.$ && window.$.fn && window.$.fn.select2) {
+      const $sel = window.$('#fmt-qris-mpo-merchant');
+      if (!$sel.data('select2')) $sel.select2();
+    }
+  }
+
+  // mapping merchant MPO -> isi Pembayaran Ke + CH
+  (function attachMpoHandlers() {
+    const sel       = document.getElementById('fmt-qris-mpo-merchant');
+    const tokoInput = document.getElementById('fmt-qris-toko');
+    const chInput   = document.getElementById('fmt-qris-ch');
+    const customWrap = document.getElementById('fmt-qris-custom-merchant-wrap');
+    const customMerchant = document.getElementById('fmt-qris-custom-merchant');
+    const customCh = document.getElementById('fmt-qris-custom-ch');
+    if (!sel || !tokoInput || !chInput) return;
+
+    const handleChange = () => {
+      const opt = sel.options[sel.selectedIndex];
+      if (!opt || !opt.value) {
+        tokoInput.value = '';
+        chInput.value   = '';
+        if (customWrap) customWrap.style.display = 'none';
+        if (chInput.parentElement) chInput.parentElement.style.display = 'block';
+        return;
+      }
+
+      // Jika pilih custom merchant
+      if (opt.value === '__CUSTOM__') {
+        tokoInput.value = '';
+        chInput.value   = '';
+        if (customWrap) {
+          customWrap.style.display = 'block';
+          console.log('Custom merchant wrap shown');
+        }
+        // Hide readonly CH QR field when custom is selected
+        if (chInput.parentElement) chInput.parentElement.style.display = 'none';
+        return;
+      }
+
+      // Merchant dari list
+      if (customWrap) customWrap.style.display = 'none';
+      if (chInput.parentElement) chInput.parentElement.style.display = 'block';
+      const name      = opt.text;
+      const chDisplay = opt.dataset.chDisplay ||
+                        (opt.dataset.chCode && opt.dataset.chNumber
+                          ? `${opt.dataset.chCode} = ${opt.dataset.chNumber}`
+                          : '');
+
+      tokoInput.value = name;
+      chInput.value   = chDisplay;
+    };
+
+    // Native event listener
+    sel.addEventListener('change', handleChange);
+
+    // jQuery/select2 event listener
+    if (window.$ && window.$('#fmt-qris-mpo-merchant').length) {
+      window.$('#fmt-qris-mpo-merchant').on('change', handleChange);
+    }
+
+    // Sync custom merchant input ke field utama
+    if (customMerchant) {
+      customMerchant.addEventListener('input', () => {
+        tokoInput.value = customMerchant.value;
+      });
+    }
+    if (customCh) {
+      customCh.addEventListener('input', () => {
+        chInput.value = customCh.value;
+      });
+    }
+  })();
+
+  // event tombol pilihan merchant
+  document
+    .querySelectorAll('#fmt-qris-btn-group .fmt-note-btn')
+    .forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        document
+          .querySelectorAll('#fmt-qris-btn-group .fmt-note-btn')
+          .forEach(b => b.classList.remove('active'));
+        e.target.classList.add('active');
+
+        qrisSelectedType = e.target.dataset.qrisType;
+        window.qrisSelectedType = qrisSelectedType;
+        renderQrisSections();
+      });
+    });
+
+  // initial: semua hidden
+  qrisSelectedType = '';
+  window.qrisSelectedType = '';
+  renderQrisSections();
+}
+
+
+
+  // ====== DEPOSIT PULSA (TETAP ADA) ======
+  else if (dt === 'pulsa'){
+    df.innerHTML = `
+      <label>ID</label><input id="fmt-pulsa-id" type="text" placeholder="okebos11">
+      <label>Asset (WLB)</label><select id="fmt-pulsa-asset">${asetOptions}</select>
+      <label>No SN</label><input id="fmt-pulsa-sn" type="text" placeholder="9750...">
+      <label>No Tujuan</label><input id="fmt-pulsa-tujuan" type="text" placeholder="0831...">
+      <label>Nominal</label><input id="fmt-pulsa-nominal" type="text" placeholder="99.850">
+      <label>Provider</label><input id="fmt-pulsa-provider" type="text" placeholder="AXIS">
+      <label>Noted</label><input id="fmt-pulsa-note" type="text" placeholder="dibantu check SN kak">`;
+  }
+}
+
+
+  // =========================
+  // EVENT: Ganti kategori
+  // =========================
+  categorySel.addEventListener('change',()=>{
+    const t = currentType();
+    area.innerHTML='';
+    unsuspendBtn.style.display='none';
+
+    if (t==='reset')             renderResetSelector();
+    else if (t==='ongoingto')    renderOngoingToForm();
+    else if (t==='saldohilang')  renderSaldoHilangForm();
+    else if (['turnover','lock','bonusexpired','cekbonus','claimbonusvip','claimkycref','requestkyc'].includes(t))
+    renderSimpleForm(t);
+    else if (t==='validasi')     renderValidasiForm();
+    else if (t==='duplicateid')  renderDuplicateIdForm();
+    else if (t==='defaultbank')  renderDefaultBankForm();
+    else if (t==='addrekening')  renderAddRekeningForm();
+    else if (t==='deposit')      renderDepositSelector();
+    else if (t==='wdproof')      renderWdProofForm();
+
+    updateAutoChannel();
+  });
+
+  // =========================
+  // UNSUSPEND toggle
+  // =========================
+  unsuspendBtn.addEventListener('click',(e)=>{
+    e.preventDefault();
+    fmtUnsuspend = !fmtUnsuspend;
+    window.fmtUnsuspend = fmtUnsuspend;
+    unsuspendBtn.textContent = fmtUnsuspend ? '✔ Unsuspend Added' : '+ Unsuspend';
+    unsuspendBtn.classList.toggle('primary', fmtUnsuspend);
+    unsuspendBtn.classList.toggle('accent', !fmtUnsuspend);
+  });
+
+  // =========================
+  // FORMAT BANK MEMBER
+  // =========================
+  function formatBankMember(rawBank){
+    const parts = rawBank.match(/^(\S+)\s+(\S+)\s+(.*)$/);
+    if (parts && parts.length===4) return `${parts[1]}\t${parts[2]}\t${parts[3]}`;
+    return rawBank;
+  }
+
+  // =========================
+  // GEN TEXT
+  // =========================
+  const ensureWalletForSend = ensureWalletDisplay;
+
+  function genText() {
+    const officer = (officerInp?.value || '').trim();
+    const type    = currentType();
+
+    if (!officer || officer.length < 3) return 'Nama Officer belum diisi!';
+    if (!type) return 'Pilih Jenis Permintaan yang valid.';
+
+    // VALIDASI
+    if (type === 'validasi') {
+      const id         = (document.getElementById('fmt-val-id')?.value || '').trim();
+      const aset       = (document.getElementById('fmt-val-aset')?.value || '').trim();
+      const registered = (document.getElementById('fmt-val-registered')?.value || '').trim();
+      const to         = (document.getElementById('fmt-val-to')?.value || '').trim();
+      const walletRaw  = (document.getElementById('fmt-val-wallet')?.value || '').trim();
+      const noteExtra  = (document.getElementById('fmt-val-note-extra')?.value || '').trim();
+
+      if (!id || !aset) return 'ID dan Aset wajib diisi.';
+      if (!walletRaw)   return 'Main Wallet wajib diisi.';
+
+      const wallet = ensureWalletForSend(aset, walletRaw);
+
+      const actives = Array.from(
+        document.querySelectorAll('#fmt-val-note-group .fmt-note-btn.active')
+      ).map(btn => btn.dataset.note).filter(Boolean);
+
+      const noteMap = {
+        name: 'help validate name',
+        number: 'help validate number',
+        space: 'help validate space'
+      };
+      const noteLines = actives.map(k => `- ${noteMap[k] || k}`);
+
+      const lines = [
+        'VALIDASI ACCOUNT',
+        '',
+        `ID : ${id}`,
+        `Aset : ${aset}`,
+        '',
+        'Registered :',
+        registered,
+        '',
+        'TO :',
+        to,
+        '',
+        `Main Wallet : ${wallet}`
+      ];
+      if (noteLines.length) lines.push('NOTE :', ...noteLines);
+      if (noteExtra) lines.push(`Note tambahan : ${noteExtra}`);
+      lines.push(`Officer : ${officer}`);
+      return lines.join('\n');
+    }
+
+    // DUPLICATE ID
+    if (type === 'duplicateid') {
+      const id1 = (document.getElementById('fmt-dup-id-1')?.value || '').trim();
+      const id2 = (document.getElementById('fmt-dup-id-2')?.value || '').trim();
+      const id3 = (document.getElementById('fmt-dup-id-3')?.value || '').trim();
+      const id4 = (document.getElementById('fmt-dup-id-4')?.value || '').trim();
+      const aset = (document.getElementById('fmt-dup-aset')?.value || '').trim();
+      const linkBank = (document.getElementById('fmt-dup-link-bank')?.value || '').trim();
+      const choosenId = (document.getElementById('fmt-dup-member-choosen')?.value || '').trim();
+      const note = (document.getElementById('fmt-dup-note')?.value || '').trim();
+
+      if (!id1 || !aset) return 'ID dan Aset wajib diisi.';
+      const allIds = [id1, id2, id3, id4].filter(Boolean).join(' // ');
+
+      return [
+        'Duplicate ID',
+        '',
+        `ID : ${allIds}`,
+        `Aset : ${aset}`,
+        '',
+        'Link Bank Account : ',
+        linkBank,
+        '',
+        'Member choosen ID :',
+        choosenId,
+        '',
+        'Note : ',
+        note,
+        '',
+        `Officer : ${officer}`
+      ].join('\n');
+    }
+
+    // DEFAULT BANK
+    if (type === 'defaultbank') {
+      const id         = (document.getElementById('fmt-db-id')?.value || '').trim();
+      const aset       = (document.getElementById('fmt-db-aset')?.value || '').trim();
+      const registered = (document.getElementById('fmt-db-registered')?.value || '').trim();
+      const walletRaw  = (document.getElementById('fmt-db-wallet')?.value || '').trim();
+      const note       = (document.getElementById('fmt-db-note')?.value || '').trim();
+
+      if (!id || !aset) return 'ID dan Asset wajib diisi.';
+      if (!walletRaw)   return 'Main Wallet wajib diisi.';
+
+      const wallet = ensureWalletForSend(aset, walletRaw);
+
+      return [
+        'DEFAULT BANK',
+        '',
+        `ID : ${id}`,
+        `Asset : ${aset}`,
+        '',
+        'Account Registered :',
+        registered,
+        '',
+        `Main Wallet : ${wallet}`,
+        `Note : ${note}`,
+        '',
+        `Officer : ${officer}`
+      ].join('\n');
+    }
+
+    // ADD REKENING
+    if (type === 'addrekening') {
+      const id         = (document.getElementById('fmt-add-id')?.value || '').trim();
+      const aset       = (document.getElementById('fmt-add-aset')?.value || '').trim();
+      const registered = (document.getElementById('fmt-add-registered')?.value || '').trim();
+      const newrek     = (document.getElementById('fmt-add-newrek')?.value || '').trim();
+      const walletRaw  = (document.getElementById('fmt-add-wallet')?.value || '').trim();
+      const note       = (document.getElementById('fmt-add-note')?.value || '').trim();
+
+      if (!id || !aset) return 'ID dan Aset wajib diisi.';
+      if (!walletRaw)   return 'Main Wallet wajib diisi.';
+
+      const wallet = ensureWalletForSend(aset, walletRaw);
+
+      return [
+        'Help Validate this account',
+        '',
+        `ID : ${id}`,
+        `Asset : ${aset}`,
+        '',
+        'Registered :',
+        registered,
+        '',
+        'NEW REKENING :',
+        newrek,
+        '',
+        `Main Wallet : ${wallet}`,
+        `Note : ${note}`,
+        `Officer : ${officer}`
+      ].join('\n');
+    }
+
+    // ONGOING TURNOVER
+    if (type === 'ongoingto') {
+      const id   = (document.getElementById('fmt-ongo-id')?.value || '').trim();
+      const aset = (document.getElementById('fmt-ongo-aset')?.value || '').trim();
+      if (!id || !aset) return 'ID dan WLB wajib diisi.';
+      return [
+        `ID : ${id}`,
+        `WLB : ${aset}`,
+        '',
+        'Dibantu cek TO bonus berjalan kak',
+        '',
+        `Officer : ${officer}`
+      ].join('\n');
+    }
+
+// DEPOSIT
+if (type === 'deposit') {
+  const dt = document.getElementById('fmt-depositType')?.value;
+  if (!dt) return 'Pilih Jenis Deposit (QRIS atau Pulsa).';
+
+  if (dt === 'qris') {
+    const merchant = window.qrisSelectedType || '';
+    if (!merchant) {
+      return 'Pilih salah satu Merchant (QRIS NEXUS atau QRIS VIP atau QRIS MPO atau QRIS PGT).';
+    }
+
+    // =====================
+    // QRIS PGT (PAY4D)
+    // =====================
+    if (merchant === 'QRIS PGT') {
+      const userId  = (document.getElementById('fmt-qris-pgt-userId')?.value || '').trim();
+      const nominal = (document.getElementById('fmt-qris-pgt-nominal')?.value || '').trim();
+      const toko    = (document.getElementById('fmt-qris-pgt-merchant')?.value || '').trim();
+      const tgl     = (document.getElementById('fmt-qris-pgt-tgl')?.value || '').trim();
+      const jam     = (document.getElementById('fmt-qris-pgt-jam')?.value || '').trim();
+      const rrn     = (document.getElementById('fmt-qris-pgt-rrn')?.value || '').trim();
+      const pg      = (document.getElementById('fmt-qris-pgt-pg')?.value || '').trim();
+
+      return [
+        'QRIS PGT',                      // <- judul jelas
+        'WLB: PGT',
+        `User ID: ${userId}`,
+        `Nominal: ${nominal}`,
+        `Merchant: ${toko}`,
+        `Tanggal transaksi: ${tgl}`,
+        `Jam transaksi: ${jam}`,
+        `RRN QRIS/REFF ID: ${rrn}`,
+        `PAYMENT GATEWAY: ${pg}`,
+        '',
+        `Officer : ${officer}`
+      ].join('\n');
+
+    // =====================
+    // QRIS MPO
+    // =====================
+    } else if (merchant === 'QRIS MPO') {
+
+      const ALLOWED_BRANDS = new Set(['DEWARTP', 'BOSSMAHJONG', 'SUPERDEWA']);
+
+      const wlbEl = document.getElementById('fmt-qris-wlb');
+      let wlb = (wlbEl?.value || '').trim();
+
+      if (!wlb && wlbEl?.tagName === 'SELECT') {
+        const opt = wlbEl.options[wlbEl.selectedIndex];
+        wlb = (opt?.value || opt?.text || '').trim();
+      }
+
+      wlb = (wlb || 'DEWARTP').toUpperCase();
+      if (!ALLOWED_BRANDS.has(wlb)) wlb = 'DEWARTP';
+
+      const userId = (document.getElementById('fmt-qris-userId')?.value || '').trim();
+
+      const selMpo = document.getElementById('fmt-qris-mpo-merchant');
+      let toko = '';
+      let chQr = '';
+
+      // Jika pilih dari dropdown dan bukan custom
+      if (selMpo && selMpo.value && selMpo.value !== '__CUSTOM__') {
+        const opt = selMpo.options[selMpo.selectedIndex];
+        toko = (opt && opt.text) || selMpo.value;
+
+        const chDisplay = opt?.dataset?.chDisplay ||
+          (opt?.dataset?.chCode && opt?.dataset?.chNumber
+            ? `${opt.dataset.chCode} = ${opt.dataset.chNumber}`
+            : '');
+
+        chQr = chDisplay;
+      }
+
+      // Ambil dari field utama (sudah terisi dari custom input atau dropdown)
+      if (!toko) toko = (document.getElementById('fmt-qris-toko')?.value || '').trim();
+      if (!chQr) chQr = (document.getElementById('fmt-qris-ch')?.value || '').trim();
+
+      const amount = (document.getElementById('fmt-qris-nominal')?.value || '').trim();
+      const jam    = (document.getElementById('fmt-qris-jam')?.value || '').trim();
+      const rrn    = (document.getElementById('fmt-qris-rrn')?.value || '').trim();
+      const status = (document.getElementById('fmt-qris-status')?.value || '').trim();
+
+      return [
+        'QRIS MPO',
+        `WLB : ${wlb}`,
+        `User ID : ${userId}`,
+        '',
+        `CH QR : ${chQr}`,
+        `Pembayaran Ke: ${toko}`,
+        '',
+        `Amount : ${amount}`,
+        `Jam Transaksi : ${jam}`,
+        `RRN/NO REFF/RRN QRIS : ${rrn}`,
+        '',
+        `Status : ${status}`,
+        '',
+        `Officer : ${officer}`
+      ].join('\n');
+
+
+
+    // =====================
+    // QRIS NEXUS / VIP
+    // =====================
+    } else {
+      const wlb     = (document.getElementById('fmt-qris-wlb')?.value || '').trim();
+      const userId  = (document.getElementById('fmt-qris-userId')?.value || '').trim();
+      const ticket  = (document.getElementById('fmt-qris-ticket')?.value || '').trim();
+      const nominal = (document.getElementById('fmt-qris-nominal')?.value || '').trim();
+      const bukti   = (document.getElementById('fmt-qris-bukti')?.value || '').trim();
+      const toko    = (document.getElementById('fmt-qris-toko')?.value || '').trim();
+      const tgl     = (document.getElementById('fmt-qris-tgl')?.value || '').trim();
+      const jam     = (document.getElementById('fmt-qris-jam')?.value || '').trim();
+      const rrn     = (document.getElementById('fmt-qris-rrn')?.value || '').trim();
+      const status  = (document.getElementById('fmt-qris-status')?.value || '').trim();
+
+      const lines = [
+        `WLB : ${wlb}`,
+        `User ID : ${userId}`
+      ];
+      if (merchant === 'QRIS NEXUS') {
+        lines.push(`No Ticket Deposit : ${ticket}`);
+      }
+      lines.push(
+        `Nominal : ${nominal}`,
+        `Bukti Pembayaran : ${bukti}`,
+        `Toko Tujuan : ${toko}`,
+        `Tanggal transaksi : ${tgl}`,
+        `Jam transaksi : ${jam}`,
+        `RRN/RRN QRIS/REFF ID : ${rrn}`,
+        `Status : ${status}`,
+        `Merchant : ${merchant}`,
+        `Officer : ${officer}`
+      );
+      return lines.join('\n');
+    }
+  }
+
+      // pulsa
+      const id       = (document.getElementById('fmt-pulsa-id')?.value || '').trim();
+      const asset    = (document.getElementById('fmt-pulsa-asset')?.value || '').trim();
+      const sn       = (document.getElementById('fmt-pulsa-sn')?.value || '').trim();
+      const tujuan   = (document.getElementById('fmt-pulsa-tujuan')?.value || '').trim();
+      const nominal  = (document.getElementById('fmt-pulsa-nominal')?.value || '').trim();
+      const provider = (document.getElementById('fmt-pulsa-provider')?.value || '').trim();
+      const noted    = (document.getElementById('fmt-pulsa-note')?.value || '').trim();
+
+      return [
+        `ID : ${id}`,
+        `Asset : ${asset}`,
+        `No SN : ${sn}`,
+        `No Tujuan : ${tujuan}`,
+        `Nominal : ${nominal}`,
+        `Provider : ${provider}`,
+        `Noted : ${noted}`,
+        '',
+        `Officer: ${officer}`
+      ].join('\n');
+    }
+
+    // RESET
+    if (type === 'reset') {
+      const rt     = document.getElementById('fmt-resetType')?.value;
+      if (!rt) return 'Pilih Jenis Reset!';
+      const userId = (document.getElementById('fmt-reset-userId')?.value || '').trim();
+      const aset   = (document.getElementById('fmt-reset-aset')?.value || '').trim();
+      if (!userId || !aset) return 'ID dan Aset wajib diisi.';
+
+      if (rt === 'format') {
+        const from      = (document.getElementById('fmt-reset-from')?.value || '').trim();
+        const toBank    = (document.getElementById('fmt-reset-toBank')?.value || '').trim();
+        const walletRaw = (document.getElementById('fmt-reset-wallet')?.value || '').trim();
+        const extra     = (document.getElementById('fmt-reset-note-extra')?.value || '').trim();
+
+        if (!walletRaw) return 'Main Wallet wajib diisi.';
+
+        const wallet = ensureWalletForSend(aset, walletRaw);
+
+        const notes = [];
+        if (window.fmtUnsuspend) notes.push('Unsuspend');
+        if (extra) notes.push(extra);
+
+        const lines = [];
+        lines.push('Hi team Please help to Reset Password');
+        lines.push('');
+        lines.push(`ID : ${userId}`);
+        lines.push(`Brand : ${aset}`);
+        lines.push('');
+        lines.push(`From : ${from}`);
+        lines.push('');
+        lines.push(`To Bank : ${toBank}`);
+        lines.push('');
+        lines.push(`Main Wallet : ${wallet}`);
+        lines.push('');
+        if (notes.length) {
+          lines.push(`Note : ${notes.join(', ')}`);
+          lines.push('');
+        }
+        lines.push('Please makesure Credit on Main Wallet first before reset password !!!');
+        lines.push('');
+        lines.push(`Officer : ${officer}`);
+        return lines.join('\n');
+      }
+
+      const bankRaw     = (document.getElementById('fmt-reset-bankMember')?.value || '').trim();
+      const formattedBk = formatBankMember(bankRaw);
+      const note        = (document.getElementById('fmt-reset-note')?.value || '').trim();
+
+      return [
+        'Hi team Please help to Reset Password',
+        '',
+        `ID : ${userId}`,
+        `Aset : ${aset}`,
+        '',
+        `Bank Member :\t${formattedBk}`,
+        '',
+        `Catergory : New Registration${note ? `\nNote : ${note}` : ''}`,
+        '',
+        'Please makesure Credit on Main Wallet first before reset password !!!',
+        '',
+        `Officer : ${officer}`
+      ].join('\n');
+    }
+
+    // SALDO HILANG
+    if (type === 'saldohilang') {
+      const userId = (document.getElementById('fmt-saldo-userId')?.value || '').trim();
+      const brand  = (document.getElementById('fmt-saldo-brand')?.value || '').trim();
+      const refno  = (document.getElementById('fmt-saldo-refno')?.value || '').trim();
+      const ket    = (document.getElementById('fmt-saldo-ket')?.value || '').trim();
+      const tgl    = (document.getElementById('fmt-saldo-tanggal')?.value || '').trim();
+
+      if (!userId || !brand || !tgl) return 'USER ID, BRAND, dan TANGGAL wajib diisi.';
+
+      return [
+        'SALDO HILANG',
+        '',
+        `USER ID : ${userId}`,
+        `BRAND : ${brand}`,
+        `REFERENCE NO : ${refno}`,
+        `KET : ${ket}`,
+        `TANGGAL : ${tgl}`,
+        '',
+        `Officer : ${officer}`
+      ].join('\n');
+    }
+
+    // TURNOVER / LOCK / BONUS + TIPE BARU BONUS
+    if (['turnover','lock','bonusexpired','cekbonus','claimbonusvip','claimkycref','requestkyc'].includes(type)) {
+      const id   = (document.getElementById('fmt-sim-id')?.value || '').trim();
+      const aset = (document.getElementById('fmt-sim-aset')?.value || '').trim();
+      if (!id || !aset) return 'ID dan Aset wajib diisi.';
+
+      // Format khusus untuk 4 jenis permintaan baru
+      if (type === 'claimbonusvip') {
+        return [
+          `ID : ${id}`,
+          `ASSET : ${aset}`,
+          '',
+          'Claim Bonus VIP',
+          '',
+          `Officer : ${officer}`
+        ].join('\n');
+      }
+      if (type === 'claimkycref') {
+        return [
+          `ID : ${id}`,
+          `ASSET : ${aset}`,
+          '',
+          'Claim KYC Refferal',
+          '',
+          `Officer : ${officer}`
+        ].join('\n');
+      }
+      if (type === 'requestkyc') {
+        return [
+          `ID : ${id}`,
+          `BRAND : ${aset}`,
+          '',
+          'Tolong  bantu aproved KYC',
+          '',
+          `Officer : ${officer}`
+        ].join('\n');
+      }
+
+      // Format lama untuk turnover / lock / bonus
+      let msg = '';
+      if (type === 'turnover')
+        msg = "Please help me open the turnover, it's already past 1x turnover Capt";
+      else if (type === 'lock')
+        msg = 'help pindahin saldo ke lock balance';
+      else if (type === 'bonusexpired')
+        msg = 'help check bonus expired';
+
+      return [
+        `ID : ${id}`,
+        `ASSET : ${aset}`,
+        '',
+        msg,
+        '',
+        `Officer : ${officer}`
+      ].join('\n');
+    }
+
+
+    // WD PROOF
+    if (type === 'wdproof') {
+      const aset      = (document.getElementById('fmt-wdp-aset')?.value || '').trim();
+      const memberId  = (document.getElementById('fmt-wdp-id')?.value || '').trim();
+      const nominal   = (document.getElementById('fmt-wdp-nominal')?.value || '').trim();
+      const ticket    = (document.getElementById('fmt-wdp-ticket')?.value || '').trim();
+      const bank      = (document.getElementById('fmt-wdp-bank')?.value || '').trim();
+
+      if (!aset || !memberId) return 'Aset dan Member ID wajib diisi.';
+
+      return [
+        'REQUEST BUKTI TRANSFER DARI CS // ភស្តុតាងនៃការដាក់ប្រាក់ពីសេវាកម្មអតិថិជន',
+        '',
+        `ASET // ទ្រព្យសកម្ : ${aset}`,
+        `MEMBER ID // លេខសម្គាល់សមាជិក : ${memberId}`,
+        `NOMINAL // ចំនួនទឹកប្រាក់ : ${nominal}`,
+        `NO TIKET // លេខសំបុត្រ : ${ticket}`,
+        `BANK // ធនាគារ : ${bank}`,
+        '',
+        `Officer : ${officer}`
+      ].join('\n');
+    }
+
+    return 'Pilih Jenis Permintaan yang valid.';
+  }
+
+  // =========================
+  // COPY (MANUAL ONLY)
+  // =========================
+  async function copyToClipboard(text){
+    if (!text) return;
+    try{
+      await navigator.clipboard.writeText(text);
+      if (copyNotice){
+        copyNotice.textContent = 'Berhasil disalin ✅';
+        copyNotice.style.opacity = 1;
+        setTimeout(()=>{ copyNotice.style.opacity = 0; }, 1200);
+      }
+    }catch(_){
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position='fixed';
+      ta.style.opacity='0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch {}
+      document.body.removeChild(ta);
+      if (copyNotice){
+        copyNotice.textContent = 'Disalin (fallback) ✅';
+        copyNotice.style.opacity = 1;
+        setTimeout(()=>{ copyNotice.style.opacity = 0; }, 1200);
+      }
+    }
+  }
+
+  if (copyBtn){
+    copyBtn.addEventListener('click', ()=>{
+      const text = genText();
+      if (!(text
+        && !text.startsWith('Nama Officer')
+        && !text.startsWith('Pilih')
+        && !text.startsWith('ID dan Aset')
+        && !text.startsWith('ID dan Asset')
+        && !text.startsWith('Aset dan Member ID')
+        && !text.startsWith('Pilih salah satu Merchant')
+        && !text.startsWith('Main Wallet wajib diisi')
+      )){
+        alert(text);
+        return;
+      }
+      copyToClipboard(text);
+    });
+  }
+
+  // =========================
+  // BRIDGE → VPS
+  // =========================
+  async function callResetBridge({ meta, mode, userId, aset, threadId, text }) {
+    // Untuk RESET: kirim meta termasuk file_ids agar znxbot bisa reply dengan foto
+    if (mode === 'reset') {
+      const payload = {
+        id: String(userId || '').trim(),
+        aset: String(aset || '').trim().toUpperCase(),
+        kind: 'reset',
+        text: text || '',
+        // Kirim meta jika ada (untuk reply)
+        ...(meta?.chat_id ? { chat_id: meta.chat_id } : {}),
+        ...(meta?.message_id ? { src_msg_id: Number(meta.message_id) } : {}),
+        ...(meta?.message_thread_id ? { message_thread_id: meta.message_thread_id } : {}),
+        // Kirim file_ids jika ada (untuk forward foto)
+        ...(meta?.file_ids && meta.file_ids.length ? { file_ids: meta.file_ids } : {}),
+      };
+
+      console.log('[reset-bridge] Sending payload (reset):', payload);
+
+      const res = await fetch(BRIDGE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const txt = await res.text().catch(() => '');
+      if (!res.ok) {
+        console.warn('[reset-bridge] NOT OK:', res.status, txt);
+      } else {
+        console.log('[reset-bridge] Success:', txt);
+      }
+      return;
+    }
+
+    // Untuk TURNOVER: masih perlu meta
+    if (!meta?.chat_id || !meta?.message_id) {
+      console.warn('[reset-bridge] skip: meta incomplete', meta);
+      return;
+    }
+
+    if (mode !== 'turnover') {
+      return;
+    }
+
+    const basePayload = {
+      chat_id: meta.chat_id,
+      src_msg_id: Number(meta.message_id),
+      id: String(userId || '').trim(),
+      aset: String(aset || '').trim().toUpperCase(),
+      ...(threadId
+        ? { message_thread_id: threadId }
+        : (meta.message_thread_id ? { message_thread_id: meta.message_thread_id } : {})),
+    };
+
+    const payload = {
+      ...basePayload,
+      kind: 'turnover',
+      reply_chat_id: CHANNEL_IDS.NEW_COMPLIENCE_ALPHA,
+      delay_sec: 2700,
+    };
+
+    console.log('[reset-bridge] Sending payload:', payload);
+
+    const res = await fetch(BRIDGE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const txt = await res.text().catch(() => '');
+    if (!res.ok) {
+      console.warn('[reset-bridge] NOT OK:', res.status, txt);
+    } else {
+      console.log('[reset-bridge] Success:', txt);
+    }
+  }
+
+  async function parseSendMeta(res) {
+    try {
+      const json = await res.clone().json().catch(() => null);
+      if (!json) {
+        console.warn('[parseSendMeta] Failed to parse JSON');
+        return null;
+      }
+
+      console.log('[parseSendMeta] Received:', json);
+
+      // Helper: extract file_ids dari photo array
+      const extractFileIds = (messages) => {
+        if (!Array.isArray(messages)) return [];
+        const fileIds = [];
+        for (const msg of messages) {
+          if (msg.photo && Array.isArray(msg.photo) && msg.photo.length) {
+            // Ambil file_id terbesar (terakhir dalam array)
+            const largest = msg.photo[msg.photo.length - 1];
+            if (largest && largest.file_id) {
+              fileIds.push(largest.file_id);
+            }
+          }
+        }
+        return fileIds;
+      };
+
+      // Case 1: raw array (dari send-telegram-media dengan raw: [...])
+      if (Array.isArray(json.raw) && json.raw.length) {
+        const m = json.raw[0];
+        const meta = {
+          message_id: m.message_id,
+          chat_id: json.chat_id || (m.chat && m.chat.id) || (json.result?.chat?.id),
+          message_thread_id: m.message_thread_id || undefined,
+          file_ids: extractFileIds(json.raw)
+        };
+        console.log('[parseSendMeta] Parsed (raw array):', meta);
+        return meta;
+      }
+
+      // Case 2: Array result (fallback)
+      if (Array.isArray(json.result) && json.result.length) {
+        const m = json.result[0];
+        const meta = {
+          message_id: m.message_id,
+          chat_id: json.chat_id || (m.chat && m.chat.id),
+          message_thread_id: m.message_thread_id || undefined,
+          file_ids: extractFileIds(json.result)
+        };
+        console.log('[parseSendMeta] Parsed (array):', meta);
+        return meta;
+      }
+
+      // Case 3: Single result object (dari send-telegram)
+      if (json.result?.message_id) {
+        const m = json.result;
+        const meta = {
+          message_id: m.message_id,
+          chat_id: json.chat_id || (m.chat && m.chat.id),
+          message_thread_id: m.message_thread_id || undefined,
+          file_ids: extractFileIds([json.result])
+        };
+        console.log('[parseSendMeta] Parsed (result):', meta);
+        return meta;
+      }
+
+      // Case 4: Direct properties
+      if (json.message_id) {
+        const meta = {
+          message_id: json.message_id,
+          chat_id: json.chat_id,
+          message_thread_id: json.message_thread_id || undefined,
+          file_ids: []
+        };
+        console.log('[parseSendMeta] Parsed (direct):', meta);
+        return meta;
+      }
+
+      // Case 5: message_ids array (fallback)
+      if (Array.isArray(json.message_ids) && json.message_ids.length && json.chat_id) {
+        const meta = {
+          message_id: json.message_ids[0],
+          chat_id: json.chat_id,
+          message_thread_id: undefined,
+          file_ids: []
+        };
+        console.log('[parseSendMeta] Parsed (message_ids):', meta);
+        return meta;
+      }
+
+      console.warn('[parseSendMeta] No valid message_id found in:', json);
+      return null;
+    } catch (err) {
+      console.error('[parseSendMeta] Error:', err);
+      return null;
+    }
+  }
+
+// =========================
+// IMAGE COMPRESS (FRONTEND)
+// =========================
+
+// detect file is image
+function isImageFile(f){
+  return !!f && (f.type || '').startsWith('image/');
+}
+
+// Convert File -> compressed File (resize + jpeg/webp)
+async function compressImageFile(file, opt = {}) {
+  const {
+    maxSide = 1280,        // ukuran max (px)
+    quality = 0.72,        // 0..1
+    mime = 'image/jpeg',   // 'image/jpeg' atau 'image/webp'
+    keepName = true,
+  } = opt;
+
+  // kalau bukan image, balikin apa adanya
+  if (!isImageFile(file)) return file;
+
+  // beberapa format (svg/gif) lebih aman jangan dipaksa
+  const t = (file.type || '').toLowerCase();
+  if (t.includes('gif') || t.includes('svg')) return file;
+
+  const img = await fileToImage(file);
+
+  let { width: w, height: h } = img;
+  if (!w || !h) return file;
+
+  // hitung resize (preserve aspect ratio)
+  const scale = Math.min(1, maxSide / Math.max(w, h));
+  const nw = Math.max(1, Math.round(w * scale));
+  const nh = Math.max(1, Math.round(h * scale));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = nw;
+  canvas.height = nh;
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  // background putih (biar PNG transparan jadi rapi)
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, nw, nh);
+
+  // gambar
+  ctx.drawImage(img, 0, 0, nw, nh);
+
+  // toBlob (async)
+  const blob = await new Promise((resolve) => {
+    canvas.toBlob((b) => resolve(b), mime, quality);
+  });
+
+  if (!blob) return file;
+
+  // kalau hasil kompres malah lebih besar, pakai original
+  if (blob.size >= file.size) return file;
+
+  const ext = mime === 'image/webp' ? 'webp' : 'jpg';
+  const baseName = keepName ? (file.name || 'image') : 'image';
+  const safeName = baseName.replace(/\.(png|jpg|jpeg|webp)$/i, '') + '.' + ext;
+
+  return new File([blob], safeName, { type: mime, lastModified: Date.now() });
+}
+
+function fileToImage(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = (e) => { URL.revokeObjectURL(url); reject(e); };
+    img.src = url;
+  });
+}
+
+// Kompres semua mediaFiles (tanpa ubah urutan)
+async function compressMediaFiles(files, opt) {
+  const out = [];
+  for (const f of files) {
+    try {
+      out.push(await compressImageFile(f, opt));
+    } catch (e) {
+      console.warn('compress fail, use original:', f?.name, e);
+      out.push(f);
+    }
+  }
+  return out;
+}
+
+
+// =========================
+// KIRIM
+// =========================
+sendBtn.addEventListener('click', async ()=> {
+  const dt   = document.getElementById('fmt-depositType')?.value;
+  const text = genText();
+
+  if (!(text
+    && !text.startsWith('Nama Officer')
+    && !text.startsWith('Pilih')
+    && !text.startsWith('ID dan Aset')
+    && !text.startsWith('ID dan Asset')
+    && !text.startsWith('Aset dan Member ID')
+    && !text.startsWith('Pilih salah satu Merchant')
+    && !text.startsWith('Main Wallet wajib diisi')
+  )){
+    alert(text);
+    return;
+  }
+
+  const t = currentType();
+  let needKTP = false;
+  let needAuditBalance = false;
+
+  if (t === 'validasi'){
+    const aset   = (document.getElementById('fmt-val-aset')?.value||'').trim();
+    const wallet = (document.getElementById('fmt-val-wallet')?.value||'').trim();
+    needKTP = isOverLimit(aset, wallet);
+  } else if (t === 'reset'){
+    const rt = document.getElementById('fmt-resetType')?.value;
+    if (rt === 'format'){
+      const aset   = (document.getElementById('fmt-reset-aset')?.value||'').trim();
+      const wallet = (document.getElementById('fmt-reset-wallet')?.value||'').trim();
+      needKTP = isOverLimit(aset, wallet);
+    }
+  } else if (t === 'saldohilang'){
+    needAuditBalance = true;
+  }
+
+  if (needKTP){
+    if (!mediaFiles.length){
+      alert('Main Wallet melebihi batas. Wajib lampirkan foto KTP terlebih dahulu.');
+      return;
+    }
+    if (!confirm('Main Wallet melebihi batas. Pastikan foto KTP sudah jelas. Lanjut?')) return;
+    if (!confirm('Kirim ke Telegram sekarang?')) return;
+  }
+
+  if (needAuditBalance){
+    if (!mediaFiles.length){
+      alert('Saldo Hilang wajib melampirkan foto Audit Balance terlebih dahulu.');
+      return;
+    }
+    if (!confirm('Pastikan foto Audit Balance sudah jelas dan lengkap. Lanjut?')) return;
+  }
+
+  let channelKey = (channelSel && channelSel.value) || autoChannelForType();
+  if (!channelKey){
+    alert('Pilih "Tujuan Format (Grup Telegram)" dulu.');
+    return;
+  }
+
+  // ==== Payload ke Google Sheets (khusus DEPOSIT → QRIS) ====
+  let depositQrisPayload = null;
+  if (t === 'deposit' && dt === 'qris') {
+    const merchant = (window.qrisSelectedType || '').trim();
+    if (['QRIS NEXUS', 'QRIS VIP', 'QRIS MPO', 'QRIS PGT'].includes(merchant)) {
+      depositQrisPayload = buildDepositQrisPayload({ merchant });
+    }
+  }
+
+  sendStatus.className='fmt-status';
+  sendStatus.style.display='none';
+
+  const original = sendBtn.innerHTML;
+  sendBtn.disabled = true;
+  sendBtn.innerHTML = 'Mengirim...';
+
+  let firstSendMeta = null;
+  let resetSendMeta = null;
+
+  try {
+    // 0) SIMPAN KE SHEET DULU (TIDAK MENGGANGGU FLOW LAIN)
+    if (depositQrisPayload) {
+      // Fire-and-forget: sengaja tidak di-await agar tidak mengganggu flow utama
+      fetch('/.netlify/functions/qris-bridge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(depositQrisPayload)
+      })
+      .then(() => console.log('[qris-bridge] sukses menyimpan ke sheet'))
+      .catch(e => console.error('[qris-bridge] gagal menyimpan ke sheet:', e));
+    }
+
+    // 0.5) KOMPRES MEDIA (percepat upload, cegah timeout)
+    const compressedFiles = await compressMediaFiles(mediaFiles, {
+      maxSide: 1280,
+      quality: 0.72,
+      mime: 'image/jpeg'
+    });
+
+    const all = await filesToDataUrls(compressedFiles);
+
+    const chunks = [];
+    for (let i=0; i<all.length; i+=10) {
+      chunks.push(all.slice(i, i+10));
+    }
+
+    const watcher_id = getWatcherId();
+
+    // 1) kirim utama
+    const isResetType = currentType() === 'reset';
+    const RESET_GROUP_KEY = 'CHARLIE_RESET_PASSWORD';
+    
+    // Untuk RESET: kirim ke grup RESET langsung (bukan channel yg dipilih)
+    // Untuk NON-RESET: kirim ke channel yang dipilih
+    const sendChannelKey = isResetType ? RESET_GROUP_KEY : channelKey;
+    
+    if (chunks.length){
+      for (let gi=0; gi<chunks.length; gi++){
+        const body = {
+          text: gi===0 ? text : '',
+          channel_key: sendChannelKey,
+          images: chunks[gi]
+        };
+        if (watcher_id) body.watcher_id = watcher_id;
+
+        const res = await fetch('/.netlify/functions/send-telegram-media', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(body)
+        });
+        if (!res.ok){
+          const msg = await res.text();
+          throw new Error(msg || 'Gagal mengirim media via bot');
+        }
+        if (gi===0) firstSendMeta = await parseSendMeta(res);
+      }
+    } else {
+      const body = { text, channel_key: sendChannelKey };
+      if (watcher_id) body.watcher_id = watcher_id;
+
+      const res = await fetch('/.netlify/functions/send-telegram', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(body)
+      });
+      if (!res.ok){
+        const msg = await res.text();
+        throw new Error(msg || 'Gagal mengirim via bot');
+      }
+      firstSendMeta = await parseSendMeta(res);
+    }
+
+    // 2) Kirim ke bridge (HANYA reset & turnover)
+    // Untuk RESET: znxbot akan reply ke pesan yang sudah dikirim Charlie Zora
+    // Untuk TURNOVER: masih pakai flow lama dengan anchorMeta
+    
+    let asetVal = '';
+    let userIdVal = '';
+    let mode = null;
+
+    if (currentType() === 'reset') {
+      asetVal = (document.getElementById('fmt-reset-aset')?.value||'').trim().toUpperCase();
+      userIdVal = (document.getElementById('fmt-reset-userId')?.value||'').trim();
+      mode = 'reset';
+    } else if (currentType() === 'turnover') {
+      asetVal = (document.getElementById('fmt-sim-aset')?.value||'').trim().toUpperCase();
+      userIdVal = (document.getElementById('fmt-sim-id')?.value||'').trim();
+      mode = 'turnover';
+    }
+
+    console.log('[send] Bridge params:', { mode, userIdVal, asetVal, firstSendMeta });
+
+    if (mode === 'reset' && asetVal && userIdVal && firstSendMeta) {
+      // RESET: kirim meta dari Charlie Zora agar znxbot bisa reply
+      const threadId = firstSendMeta.message_thread_id || undefined;
+      await callResetBridge({
+        meta: firstSendMeta,
+        mode,
+        userId: userIdVal,
+        aset: asetVal,
+        threadId
+      });
+    } else if (mode === 'turnover' && asetVal && userIdVal && firstSendMeta) {
+      // TURNOVER: masih pakai flow lama
+      const threadId = firstSendMeta.message_thread_id || undefined;
+      await callResetBridge({
+        meta: firstSendMeta,
+        mode,
+        userId: userIdVal,
+        aset: asetVal,
+        threadId
+      });
+    } else if (mode) {
+      console.warn('[send] Skipping bridge: missing params', { mode, asetVal, userIdVal, firstSendMeta });
+    }
+
+    sendStatus.textContent='Terkirim via Telegram Bot ✅';
+    sendStatus.className='fmt-status status-ok';
+    sendStatus.style.display='block';
+
+    resetCurrentForm();
+    resetMedia();
+    categorySel.value = '';
+    area.innerHTML = '';
+    setChannel('');
+    updateAutoChannel();
+    unsuspendBtn.style.display='none';
+
+    setTimeout(()=>{ sendStatus.style.display='none'; }, 2500);
+
+  } catch (err) {
+    console.warn('send-telegram(media) gagal, fallback tg://', err);
+    window.location.href = `tg://msg?text=${encodeURIComponent(text)}`;
+
+    sendStatus.textContent = 'Gagal via bot. Dibuka di aplikasi Telegram (fallback).';
+    sendStatus.className   = 'fmt-status status-err';
+    sendStatus.style.display = 'block';
+  } finally {
+    sendBtn.disabled = false;
+    sendBtn.innerHTML = original;
+  }
+});
+
+  // =========================
+  // INIT
+  // =========================
+  updateAutoChannel();
+  area.innerHTML = '';
+})();
+</script>
+
+<!-- Password form handlers (as is) -->
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      const changePasswordBtn = document.getElementById('changePasswordBtn');
+      const logoutBtn = document.getElementById('logoutBtn');
+      const passwordFormContainer = document.getElementById('passwordFormContainer');
+      const passwordChangeForm = document.getElementById('passwordChangeForm');
+      const cancelPasswordChange = document.getElementById('cancelPasswordChange');
+      const submitText = document.getElementById('submitText');
+      const passwordChangeMessage = document.getElementById('passwordChangeMessage');
+
+      changePasswordBtn.addEventListener('click', ()=>{ passwordFormContainer.style.display='block'; });
+      cancelPasswordChange.addEventListener('click', ()=>{
+        passwordFormContainer.style.display='none'; passwordChangeForm.reset(); passwordChangeMessage.style.display='none';
+      });
+
+      passwordChangeForm.addEventListener('submit', async (e)=>{
+        e.preventDefault();
+        const currentPassword = document.getElementById('currentPassword').value;
+        const newPassword = document.getElementById('newPassword').value;
+        const confirmPassword = document.getElementById('confirmPassword').value;
+
+        if (newPassword !== confirmPassword){ showPasswordMessage("New passwords don't match!","error"); return; }
+        if (newPassword.length < 6){ showPasswordMessage("Password must be at least 6 characters!","error"); return; }
+
+        submitText.innerHTML = '<div class="loading-spinner"></div> Changing...';
+        try{
+          const user = firebase.auth().currentUser;
+          const credential = firebase.auth.EmailAuthProvider.credential(user.email, currentPassword);
+          await user.reauthenticateWithCredential(credential);
+          await user.updatePassword(newPassword);
+          showPasswordMessage("Password changed successfully!","success");
+          setTimeout(()=>{
+            passwordFormContainer.style.display='none';
+            passwordChangeForm.reset(); passwordChangeMessage.style.display='none';
+          }, 2000);
+        }catch(error){
+          console.error("Error changing password:", error);
+          let errorMessage = "Failed to change password";
+          if (error.code === "auth/wrong-password") errorMessage = "Current password is incorrect";
+          else if (error.code === "auth/weak-password") errorMessage = "Password is too weak";
+          else if (error?.message) errorMessage = error.message;
+          showPasswordMessage(errorMessage,"error");
+        }finally{ submitText.textContent="Change Password"; }
+      });
+
+      logoutBtn.addEventListener('click', async function(){
+        const originalText = logoutBtn.innerHTML;
+        try{
+          logoutBtn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Logging out...';
+          logoutBtn.disabled=true;
+          const user = firebase.auth().currentUser;
+          if (user){
+            await firebase.database().ref(`sessions/${user.uid}`).remove();
+            await firebase.auth().signOut();
+          }
+          window.location.href="/login.html";
+        }catch(e){
+          console.error("Logout error:", e);
+          alert("Failed to logout. Please try again.");
+          logoutBtn.innerHTML=originalText; logoutBtn.disabled=false;
+        }
+      });
+
+      function showPasswordMessage(message,type){
+        passwordChangeMessage.textContent = message;
+        const ok = type === "success";
+        passwordChangeMessage.className = 'password-message ' + (ok ? 'password-success' : 'password-error');
+        passwordChangeMessage.style.display = "block";
+      }
+
+      window.addEventListener('click', function(event){
+        if (event.target === passwordFormContainer){
+          passwordFormContainer.style.display='none'; passwordChangeForm.reset(); passwordChangeMessage.style.display='none';
+        }
+      });
+    });
+  </script>
+<!-- Telegram binder (harus ada file /assets/js/bind-telegram.js) -->
+<script defer src="assets/js/bind-telegram.js"></script>
+
+<!-- ======= RESET PASSWORD MEMBER (UI) ======= -->
+<div id="rpm-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10000;align-items:center;justify-content:center;padding:16px;">
+  <div style="width:100%;max-width:860px;background:#fff;border-radius:12px;box-shadow:0 12px 30px rgba(0,0,0,.2);">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid #e5e7eb;">
+      <div style="font:600 16px/20px system-ui">Bank for Reset Password Member</div>
+      <button id="rpm-close" type="button" title="Tutup" style="border:none;background:transparent;font-size:20px;cursor:pointer;">×</button>
+    </div>
+
+    <div style="padding:16px 18px;">
+      <!-- Badge konfirmasi brand -->
+      <div id="rpm-badge" style="display:none;margin:-4px 0 10px 0;padding:6px 10px;border-radius:8px;background:#ecfeff;color:#0369a1;border:1px solid #bae6fd;font:500 13px/18px system-ui;">
+        Brand terkonfirmasi: <b id="rpm-badge-name"></b>
+      </div>
+
+      <!-- Grid form -->
+      <div class="rpm-grid-two" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div>
+          <label style="font:600 13px/18px system-ui;">User ID</label>
+          <input id="rpm-user" type="text" placeholder="mis. Unat123"
+                 style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;">
+        </div>
+
+        <div>
+          <label style="font:600 13px/18px system-ui;">Player Group <small style="color:#6b7280"></small></label>
+          <select id="rpm-group" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;">
+            <option value="">-- Pilih Group --</option>
+            <option>NO GROUP</option><option>NEW REGISTRATION</option>
+            <option>LOW</option><option>MEDIUM</option><option>HIGH</option>
+            <option>GOLD</option><option>VIP</option><option>VVIP</option>
+            <option>MASTER VIP</option><option>SUPER MASTER VIP</option>
+            <option></option>
+          </select>
+        </div>
+
+        <div>
+          <label style="font:600 13px/18px system-ui;">Brand</label>
+          <select id="rpm-brand" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;">
+            <option value="">-- Pilih BRAND --</option>
+            <option value="P7G">PGBET (P7G)</option>
+            <option value="PGK">PGKING (PGK)</option>
+            <option value="PGT">PGTOTO (PGT)</option>
+            <option value="88C">88CASH (88C)</option>
+            <option value="SL3">SLOT365 (SL3)</option>
+            <option value="USL">UNOSLOT (USL)</option>
+            <option value="PGW">DEWA375 (PGW)</option>
+            <option value="PGD">GARUDA365 (PGD)</option>
+            <option value="DEWARTP">DEWARTP</option>
+            <option value="BOSSMAHJONG">BOSSMAHJONG</option>
+            <option value="SUPERDEWA">SUPERDEWA</option>
+          </select>
+        </div>
+
+        <div>
+          <label style="font:600 13px/18px system-ui;">Nama</label>
+          <input id="rpm-nama" type="text" placeholder="Nama pemilik rekening"
+                 style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;">
+        </div>
+
+        <div>
+          <label style="font:600 13px/18px system-ui;">Jenis Bank</label>
+          <input id="rpm-bank" type="text" placeholder="BCA / BRI / BNI / MANDIRI ..."
+                 style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;">
+        </div>
+
+        <div>
+          <label style="font:600 13px/18px system-ui;">Nomor Rekening</label>
+          <input id="rpm-norek" type="text" placeholder="Nomor Rekening"
+                 style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;">
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div style="display:flex;gap:10px;align-items:center;margin-top:14px;">
+        <button id="rpm-confirm" type="button"
+                style="padding:10px 14px;border:0;border-radius:8px;background:#16a34a;color:#fff;font-weight:700;cursor:pointer;">
+          ✔ Konfirmasi BRAND
+        </button>
+        <button id="rpm-generate" type="button"
+                style="padding:10px 14px;border:0;border-radius:8px;background:#3b82f6;color:#fff;font-weight:700;cursor:pointer;"
+                disabled>
+          ⚙️ Generate
+        </button>
+      </div>
+
+      <!-- Hasil -->
+      <div id="rpm-result-wrap" style="display:none;margin-top:12px;">
+        <div style="font:600 14px/20px system-ui;margin-bottom:6px;">Hasil</div>
+        <pre id="rpm-result"
+             style="margin:0;padding:12px;border:1px dashed #cbd5e1;border-radius:8px;background:#f8fafc;white-space:pre-wrap;font:13px/18px ui-monospace,Consolas,Menlo,monospace;"></pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<script>
+/* ======= RESET PASSWORD MEMBER (SCRIPT) – Double Confirm Brand,
+ *         LOCK form setelah generate (wajib Reset), tidak bisa diedit ======= */
+(function () {
+  function ready(fn) {
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn);
+    else fn();
+  }
+
+  ready(function () {
+    const modal    = document.getElementById('rpm-modal');
+    const btnOpen  = document.getElementById('btn-reset-member');
+    const btnClose = document.getElementById('rpm-close');
+
+    const elUser  = document.getElementById('rpm-user');
+    const elGroup = document.getElementById('rpm-group');
+    const elBrand = document.getElementById('rpm-brand');
+    const elNama  = document.getElementById('rpm-nama');
+    const elBank  = document.getElementById('rpm-bank');
+    const elNorek = document.getElementById('rpm-norek');
+
+    const badgeWrap  = document.getElementById('rpm-badge');
+    const badgeName  = document.getElementById('rpm-badge-name');
+    const btnConfirm = document.getElementById('rpm-confirm');
+    const btnGen     = document.getElementById('rpm-generate');
+
+    const resWrap = document.getElementById('rpm-result-wrap');
+    const resBox  = document.getElementById('rpm-result');
+
+    // Container tombol hasil (Copy / Reset)
+    let actions = document.getElementById('rpm-result-actions');
+    if (!actions) {
+      actions = document.createElement('div');
+      actions.id = 'rpm-result-actions';
+      actions.style.display = 'none';
+      actions.style.marginTop = '8px';
+      actions.style.gap = '8px';
+      actions.style.display = 'flex';
+      resWrap.appendChild(actions);
+      actions.style.display = 'none';
+    }
+
+    let brandLocked  = false; // hasil klik "Konfirmasi BRAND"
+    let resultLocked = false; // true setelah Generate → wajib Reset untuk edit lagi
+
+    function openModal() {
+      modal.style.display = 'flex';
+      document.body.style.overflow = 'hidden';
+      setTimeout(() => elUser?.focus(), 50);
+    }
+    function closeModal() {
+      modal.style.display = 'none';
+      document.body.style.overflow = '';
+    }
+
+    window.rpmOpen  = openModal;
+    window.rpmClose = closeModal;
+
+    btnOpen  && btnOpen.addEventListener('click', openModal);
+    btnClose && btnClose.addEventListener('click', closeModal);
+    modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && modal.style.display === 'flex') closeModal();
+      if (e.key === 'Enter' && brandLocked && !resultLocked && modal.style.display === 'flex' && !btnGen.disabled) {
+        e.preventDefault(); btnGen.click();
+      }
+    });
+
+    function lockBrandUI(lock) {
+      brandLocked = !!lock;
+      elBrand.disabled    = brandLocked;
+      btnConfirm.disabled = brandLocked;
+      btnGen.disabled     = !brandLocked || resultLocked;
+      if (brandLocked) {
+        badgeName.textContent = elBrand.options[elBrand.selectedIndex]?.text || elBrand.value;
+        badgeWrap.style.display = 'block';
+      } else {
+        badgeWrap.style.display = 'none';
+      }
+    }
+
+    // 🔒 Kunci form total (disable semua input & select) — tetap bisa Copy via tombol
+    function setFormLockedState(locked) {
+      resultLocked = !!locked;
+
+      const textInputs = [elUser, elNama, elBank, elNorek];
+      const selects    = [elGroup, elBrand];
+
+      textInputs.forEach(inp => {
+        if (!inp) return;
+        inp.disabled = resultLocked;                 // benar-benar tidak bisa diubah
+        inp.style.backgroundColor = resultLocked ? '#f3f4f6' : '';
+        inp.style.cursor = resultLocked ? 'not-allowed' : '';
+      });
+
+      selects.forEach(sel => {
+        if (!sel) return;
+        sel.disabled = resultLocked || (sel === elBrand && brandLocked);
+        sel.style.backgroundColor = (resultLocked || (sel === elBrand && brandLocked)) ? '#f3f4f6' : '';
+        sel.style.cursor = (resultLocked || (sel === elBrand && brandLocked)) ? 'not-allowed' : '';
+      });
+
+      // cegah input paksa (paste/keydown) saat locked
+      const guard = (ev) => { if (resultLocked) ev.preventDefault(); };
+      [...textInputs, ...selects].forEach(el => {
+        if (!el.__guarded) {
+          el.addEventListener('keydown', guard);
+          el.addEventListener('paste', guard);
+          el.addEventListener('input', guard);
+          el.__guarded = true;
+        }
+      });
+
+      btnConfirm.disabled = brandLocked || resultLocked;
+      btnGen.disabled     = !brandLocked || resultLocked;
+    }
+
+    function resetFormOnly() {
+      elUser.value  = '';
+      elGroup.value = '';
+      elBrand.value = '';
+      elNama.value  = '';
+      elBank.value  = '';
+      elNorek.value = '';
+      setFormLockedState(false);
+      lockBrandUI(false);
+    }
+
+    btnConfirm.addEventListener('click', () => {
+      if (!elBrand.value) return alert('Pilih BRAND terlebih dahulu.');
+      lockBrandUI(true);
+    });
+
+    // Tombol Copy / Reset
+    function renderActions() {
+      actions.innerHTML = '';
+
+      const mkBtn = (label) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = label;
+        b.style.padding = '8px 12px';
+        b.style.border = '0';
+        b.style.borderRadius = '8px';
+        b.style.cursor = 'pointer';
+        return b;
+      };
+
+      const btnCopy = mkBtn('Copy');
+      btnCopy.style.background = '#111827';
+      btnCopy.style.color = '#fff';
+      btnCopy.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(resBox.textContent || '');
+          alert('Teks berhasil disalin.');
+        } catch {
+          const sel = window.getSelection();
+          const r = document.createRange();
+          r.selectNodeContents(resBox);
+          sel.removeAllRanges();
+          sel.addRange(r);
+          document.execCommand('copy');
+          sel.removeAllRanges();
+          alert('Teks disalin (fallback).');
+        }
+      };
+
+      const btnReset = mkBtn('Reset Form');
+      btnReset.style.background = '#ef4444';
+      btnReset.style.color = '#fff';
+      btnReset.onclick = () => {
+        resetFormOnly();
+        resBox.textContent = '';
+        resWrap.style.display = 'none';
+        actions.style.display = 'none';
+      };
+
+      actions.appendChild(btnCopy);
+      actions.appendChild(btnReset);
+      actions.style.display = 'flex';
+    }
+
+    // === Generate (DOUBLE CONFIRM) ===
+    btnGen.addEventListener('click', async () => {
+      if (resultLocked) return alert('Form terkunci. Tekan "Reset Form" untuk membuat data baru.');
+
+      const userId = (elUser.value || '').trim();
+      const group  = (elGroup.value || '').trim();
+      const brand  = (elBrand.value || '').trim();  // kode P7G/PGK/PGT/88C/…
+      const brandText = elBrand.options[elBrand.selectedIndex]?.text || brand;
+      const nama   = (elNama.value || '').trim();
+      const bank   = (elBank.value || '').trim().toUpperCase();
+      const norek  = (elNorek.value || '').trim();
+
+      if (!brandLocked) return alert('Konfirmasi BRAND dulu.');
+      if (!userId) return alert('User ID belum diisi.');
+      if (!group)  return alert('Player Group belum dipilih.');
+      if (!bank || !norek || !nama) return alert('Lengkapi Jenis Bank, Nomor Rekening, dan Nama.');
+
+      // Confirm #1 — khusus memastikan BRAND
+      if (!window.confirm(`Konfirmasi BRAND: ${brandText}\n\nKlik OK untuk lanjut.`)) return;
+
+      // Confirm #2 — ringkasan lengkap
+      const confirmMsg =
+`Mohon cek kembali:
+
+• BRAND    : ${brandText}
+• User ID  : ${userId}
+• Group    : ${group}
+• Rekening : ${bank} ${norek} - ${nama}
+
+Jika sudah benar, klik OK untuk generate.`;
+      if (!window.confirm(confirmMsg)) return;
+
+      const bankMember = `${bank} ${norek} ${nama}`.trim();
+
+      btnGen.disabled = true;
+      const oldText = btnGen.textContent;
+      btnGen.textContent = 'Mengambil…';
+
+      try {
+        const res = await fetch('/.netlify/functions/tujuan-bank', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            brand,                // P7G/PGK/PGT/88C/…
+            user_id: userId,
+            player_group: group,
+            bank_member: bankMember
+          })
+        });
+
+        let data = null;
+        try { data = await res.json(); } catch {}
+
+        if (!res.ok || !data?.ok) {
+          const raw = data?.error || await res.text();
+          throw new Error(raw || 'Gagal mengambil tujuan bank.');
+        }
+
+        const website  = data.website_name || brandText;
+        const tujuanLn = data.bankline_tujuan || (
+          `${data.result.jenis_bank} ${data.result.no_rek} a.n. ${data.result.nama_rek}`
+        );
+
+        const out =
+`User ID : ${userId}
+Website : ${website}
+Rekening : ${bank} ${nama} ${norek}
+
+Baik bosku, untuk kendala *login lupa password/kata sandi* dalam sistem kami diwajibkan untuk *deposit* sebagai syarat login dengan password terbaru ya 
+
+${tujuanLn}
+
+minimal depositnya 10 ribu ya bosku 
+
+Wajib pakai rekening terdaftar ya bosku depositnya`;
+
+        resBox.textContent = out;
+        resWrap.style.display = 'block';
+        renderActions();
+
+        // 🔒 Kunci total setelah berhasil generate — WAJIB Reset untuk edit lagi
+        setFormLockedState(true);
+      } catch (e) {
+        alert(e.message || e);
+      } finally {
+        btnGen.disabled = !brandLocked || resultLocked;
+        btnGen.textContent = oldText;
+      }
+    });
+  });
+})();
+</script>
+
+<script>
+/* ========= HOTFIX: tambah isOverLimit agar "Kirim ke Telegram" tidak error ========= */
+(function () {
+  // Jika sudah ada (dari file lain), jangan timpa
+  if (typeof window.isOverLimit === 'function') return;
+
+  // Gunakan nilai batas yang sama dengan form
+  var MAX_WALLET_NORMAL = 299;     // non-PGT → format "x.xx [y.yy]"
+  var MAX_WALLET_PGT    = 299999;  // PGT → angka bulat (dengan pemisah ribuan)
+
+  // Fallback kecil kalau parser utama belum ada (harusnya sudah ada)
+  function _normalizeToFloat(s){
+    if (s == null) return null;
+    s = String(s).trim().replace(/\s+/g,'');
+    if (s.indexOf('.')>-1 && s.indexOf(',')>-1){ s = s.replace(/\./g,'').replace(/,/g,'.'); }
+    else { s = s.replace(/,/g,'.'); }
+    s = s.replace(/[^0-9.]/g,'');
+    var lastDot = s.lastIndexOf('.');
+    if (lastDot !== -1){
+      var left = s.slice(0,lastDot).replace(/\./g,'');
+      var right = s.slice(lastDot+1).replace(/\./g,'');
+      s = left + '.' + right;
+    }
+    var n = parseFloat(s);
+    return Number.isFinite(n) ? n : null;
+  }
+  function _parseOutsideInside(raw){
+    if (!raw || !String(raw).trim()) return [null, null];
+    var nums = raw.match(/[\d.,]+/g) || [];
+    var outStr = nums.length>=1 ? nums[0] : null;
+    var inStr  = nums.length>=2 ? nums[1] : null;
+    return [
+      _normalizeToFloat(outStr),
+      _normalizeToFloat(inStr)
+    ];
+  }
+
+  // Fungsi utama: true jika melewati batas
+  window.isOverLimit = function(aset, walletRaw){
+    var a = String(aset||'').toUpperCase();
+    var w = String(walletRaw||'').trim();
+    if (!w) return false;
+
+    if (a === 'PGT') {
+      // PGT: angka bulat (boleh ada titik pemisah ribuan)
+      var digits = w.replace(/[^\d]/g,'');
+      var n = digits ? parseInt(digits,10) : 0;
+      return n > MAX_WALLET_PGT;
+    }
+
+    // Non-PGT: format "outside [inside]"
+    var parseFn = (typeof parseOutsideInsideFromRaw === 'function')
+      ? parseOutsideInsideFromRaw
+      : _parseOutsideInside;
+
+    var pair = parseFn(w) || [0,0];
+    var outVal = pair[0] || 0;
+    var inVal  = pair[1] || 0;
+    return (outVal > MAX_WALLET_NORMAL) || (inVal > MAX_WALLET_NORMAL);
+  };
+})();
+</script>
+
+
+</body>
+</html>

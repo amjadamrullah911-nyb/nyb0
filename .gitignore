@@ -1,0 +1,7 @@
+# Local Netlify folder
+.netlify
+.env
+firebaseconfig.env
+RAPIDAPI_KEY.env
+node_modules/
+firebase-service-account.json
